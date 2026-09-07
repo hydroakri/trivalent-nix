@@ -64,8 +64,12 @@ Requirements and known gaps:
   systems. Wayland still works if the session provides it (`NIXOS_OZONE_WL=1`,
   or pass `--ozone-platform=wayland` / `USE_WAYLAND=true`); Vulkan stays off
   and the browser runs on GL/ANGLE-GLES.
-- **No `trivalent-selinux`.** secureblue ships a companion SELinux policy module;
-  NixOS does not use SELinux, so that confinement layer is simply not present.
+- **No `trivalent-selinux`.** secureblue ships a companion SELinux policy module.
+  This is a **NixOS platform limitation, not a packaging gap**: NixOS has no
+  usable SELinux policy (the store layout is incompatible with Fedora's targeted
+  base policy, which `trivalent-selinux` only extends). The MAC layer would have
+  to be re-provided with AppArmor or nixpak (see below); nothing this flake does
+  can carry it over.
 - **No automatic updates.** Until the CI (deferred) exists, `pins.nix` is bumped
   by hand. A browser you do not update is a real risk -- budget for the manual
   update cycle below, or do not rely on this yet.
@@ -161,8 +165,9 @@ Not affiliated with secureblue, Trivalent, or quixaq.
 
 **Degraded / absent**
 
-- `trivalent-selinux`: no SELinux on NixOS and no AppArmor profile -- the browser
-  process runs with **no MAC confinement**.
+- `trivalent-selinux`: **NixOS has no usable SELinux** (platform limitation, not a
+  packaging gap) and no AppArmor profile ships here -- the browser process runs
+  with **no MAC confinement**. Recover it with AppArmor or nixpak, not SELinux.
 - GPU process is **not sandboxed** (`chrome://gpu` -> `Sandboxed: false`) under the
   FHS+bwrap wrap; the renderer and network sandboxes are unaffected.
 - Vulkan disabled -- secureblue's `/etc/trivalent/trivalent.conf` (which sets
