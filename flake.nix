@@ -40,11 +40,16 @@
           pkgs = pkgsFor system;
           arch = nixpkgs.lib.head (nixpkgs.lib.splitString "-" system);
           pin = pins.${arch};
+          anchors = import ./lib/anchors.nix { inherit (nixpkgs) lib; };
+          # pure, offline, in the build graph: layers 1+2+3
+          verified = pkgs.callPackage ./lib/verify.nix { inherit anchors pins arch; };
         in
         {
+          supply-chain = verified;
           trivalent = pkgs.callPackage ./lib/mk-trivalent.nix {
             inherit arch;
             versionInfo = pin // {
+              inherit verified;
               verifyLogDir = ./verify/logs + "/${pin.versionRelease}";
             };
             # F4: default "fedora-rpm" (branch B). "nixpkgs" (branch A) is
@@ -103,6 +108,9 @@
         # nixpkgs-drift gate: `nix flake check` goes red before a broken
         # browser can be deployed.
         trivalent = self.packages.${system}.trivalent;
+        # pure offline re-verification of the pinned RPM (layers 1+2+3) --
+        # `nix flake check` fails if any layer fails.
+        supply-chain = self.packages.${system}.supply-chain;
         # cheap eval-only gate: the pinned SRI is well-formed and the log exists
         pin-log-present = (pkgsFor system).runCommand "pin-log-present" { } ''
           test -f ${./verify/logs + "/${pins.x86_64.versionRelease}"}/summary.txt

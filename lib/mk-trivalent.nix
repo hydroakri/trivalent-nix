@@ -1,10 +1,9 @@
 # Trivalent, repackaged from the secureblue RPM.
 #
 # Technique borrowed from quixaq/trivalent-nix (rpm2cpio unpack + FHS wrap);
-# trust baseline is NOT borrowed -- the RPM's sha256 here is one that
-# verify/10-verify-supply-chain.sh returned RESULT: PASS for (all three of rpm
-# body signature, signed repodata, SLSA provenance), and its log lives at
-# verify/logs/<version-release>/ and is copied into $out below.
+# trust baseline is NOT borrowed -- `src` is lib/verify.nix's output, which
+# only contains the RPM after layers 1+2+3 pass offline in the build graph.
+# Its log + the shell-flow log ship in $out/share/trivalent/supply-chain-logs/.
 #
 # ---------------------------------------------------------------------------
 # F4 (glibc symbol compatibility) -- STATUS: measured on omen15, see
@@ -29,7 +28,6 @@
   stdenv,
   buildFHSEnv,
   callPackage,
-  fetchurl,
   rpm,
   cpio,
   patchelf,
@@ -67,16 +65,17 @@
   bashInteractive,
 
   arch ? (lib.head (lib.splitString "-" stdenv.hostPlatform.system)),
-  versionInfo, # { versionRelease; version; url; hash; verifyLogDir ? null; }
+  # { versionRelease; version; rpmUrl; rpmHash; verified; verifyLogDir ? null; }
+  # `verified` is lib/verify.nix's output dir -- its trivalent.rpm is the src, so
+  # nothing unverified can enter the build.
+  versionInfo,
   glibcStrategy ? "fedora-rpm", # "fedora-rpm" (F4 branch B, default) | "nixpkgs" (branch A)
 }:
 let
-  inherit (versionInfo)
-    versionRelease
-    version
-    url
-    hash
-    ;
+  inherit (versionInfo) versionRelease version;
+  url = versionInfo.rpmUrl;
+  hash = versionInfo.rpmHash;
+  inherit (versionInfo) verified;
   verifyLogDir = versionInfo.verifyLogDir or null;
 
   runtimeLibs = [
@@ -110,7 +109,8 @@ let
   fedoraGlibc =
     if glibcStrategy == "fedora-rpm" then callPackage ./mk-glibc-rpm.nix { inherit arch; } else null;
 
-  src = fetchurl { inherit url hash; };
+  # the RPM comes from lib/verify.nix -- it exists there only after layers 1+2+3
+  src = "${verified}/trivalent.rpm";
 
   trivalentUnwrapped = stdenv.mkDerivation {
     pname = "trivalent-unwrapped";
@@ -175,9 +175,10 @@ let
         done
       ''}
 
-      # supply-chain verification log travels with the package (acceptance req 1)
+      # supply-chain verification logs travel with the package (acceptance req 1)
       logdir="$out/share/trivalent/supply-chain-logs"
       mkdir -p "$logdir"
+      cp --no-preserve=mode,ownership ${verified}/supply-chain.log "$logdir/pure-build.log"
       ${lib.optionalString (verifyLogDir != null) ''
         cp -r --no-preserve=mode,ownership ${verifyLogDir}/. "$logdir/"
       ''}
@@ -185,6 +186,7 @@ let
         "version-release : ${versionRelease}" \
         "rpm url         : ${url}" \
         "rpm sri         : ${hash}" \
+        "verified by     : lib/verify.nix (offline, in the build graph)" \
         "glibc strategy  : ${glibcStrategy}" > "$logdir/PIN.txt"
       chmod -R u+w "$out/share/trivalent"
 
