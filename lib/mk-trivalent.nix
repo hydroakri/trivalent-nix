@@ -235,8 +235,15 @@ let
 
         # (3) real load + relocation -- only on the browser binary; the crashpad
         #     handler is an IPC daemon, not a CLI, and --version misbehaves.
+        #     The binary is BIND_NOW + full RELRO, so this eagerly resolves EVERY
+        #     symbol in the binary AND its entire transitive link closure (not
+        #     just the RPATH libs) -- a removed export / soname / glibc-symbol
+        #     break anywhere in that graph fails here. LD_BIND_NOW is belt-and-
+        #     suspenders in case a future Trivalent build drops the flag.
+        #     NOT covered: libraries dlopen()'d at runtime (GL/VA-API drivers,
+        #     pipewire/cups modules, libsecret) -- that is verify/30's job.
         if [ "$(basename "$bin")" = trivalent ]; then
-          vout="$(timeout 30 env -i HOME="$TMPDIR" PATH=/noexist \
+          vout="$(timeout 40 env -i HOME="$TMPDIR" PATH=/noexist LD_BIND_NOW=1 \
                     "$bin" --version 2>&1 || true)"
           if printf '%s\n' "$vout" | grep -Eq "version \`GLIBC_[0-9.]+' not found|undefined symbol|error while loading shared|cannot open shared object|relocation error"; then
             printf '%s\n' "$vout" | grep -Ev 'no version information available' >&2
