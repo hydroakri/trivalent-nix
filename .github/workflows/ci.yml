@@ -49,6 +49,7 @@ jobs:
       # push the verified closure so consumers substitute instead of rebuild
       - name: Attic push (main only)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        continue-on-error: true
         run: |
           nix build .#trivalent .#supply-chain --print-out-paths --no-link \
             | xargs attic push cachix

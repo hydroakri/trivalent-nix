@@ -151,6 +151,7 @@ jobs:
   publish:
     needs: update
     if: needs.update.outputs.merged == 'true'
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
