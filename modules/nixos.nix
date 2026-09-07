@@ -71,8 +71,10 @@ let
     abi <abi/4.0>,
     include <tunables/global>
 
-    # attach by store glob so version bumps need no change here
-    profile trivalent /nix/store/*-trivalent-[0-9]*/bin/trivalent /nix/store/*-trivalent-*-bwrap flags=(attach_disconnected,mediate_deleted${
+    # attach by store glob so version bumps need no change here. One attachment
+    # expression only -- brace alternation covers both the buildFHSEnv `-bwrap`
+    # launcher (what the bin/ symlink resolves to) and the bin/trivalent path.
+    profile trivalent /nix/store/*-trivalent-*{-bwrap,/bin/trivalent} flags=(attach_disconnected,mediate_deleted${
       lib.optionalString (!cfg.apparmor.enforce) ",complain"
     }) {
       include <abstractions/base>
