@@ -1,6 +1,6 @@
 # trivalent-nix
 
-[![ci](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml/badge.svg)](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml)
+[![ci](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml)
 
 A standalone Nix flake that packages [secureblue Trivalent](https://github.com/secureblue/Trivalent)
 (hardened Chromium) from the upstream signed RPM. The **three-layer supply-chain
