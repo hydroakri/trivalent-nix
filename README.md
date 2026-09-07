@@ -1,5 +1,8 @@
 # trivalent-nix
 
+[![ci](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml/badge.svg)](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml)
+[![auto-update](https://github.com/hydroakri/trivalent-nix/actions/workflows/update-trivalent.yml/badge.svg)](https://github.com/hydroakri/trivalent-nix/actions/workflows/update-trivalent.yml)
+
 A standalone Nix flake that packages [secureblue Trivalent](https://github.com/secureblue/Trivalent)
 (hardened Chromium) from the upstream signed RPM. The **three-layer supply-chain
 verification runs in the build graph** (`lib/verify.nix`, pure + fully offline):
