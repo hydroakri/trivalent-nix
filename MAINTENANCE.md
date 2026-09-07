@@ -155,6 +155,12 @@ nothing) on F1/F2/F3 -- key change, trusted-root mismatch, provenance format
 change, repodata ahead of GitHub. The CI turns a HALT into a `blocked` GitHub
 issue; resolve it with the procedures in this file.
 
+After a bump that changes the launcher or the sandbox wrapper, also run
+`verify/30-sandbox-selfcheck.sh` on real hardware (needs `ptrace`): besides the
+sandbox parity checks it now asserts a system `LD_PRELOAD` sentinel never enters
+the browser (exit `55`). `checks.launcher-scrub` covers the same property in
+`nix flake check` without hardware.
+
 ---
 
 ## Key rotation (F1)

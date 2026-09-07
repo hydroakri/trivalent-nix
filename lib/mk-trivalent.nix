@@ -26,6 +26,15 @@
 #   runScript costs nothing and means zero edits to a security-sensitive
 #   script (quixaq execs the raw binary and loses the layer). verify/30-
 #   sandbox-selfcheck.sh is the runtime gate that nothing silently downgraded.
+#
+#   Preload scrub -- trivalent.sh keeps a system LD_PRELOAD (a NixOS
+#   graphene-hardened-light / hardened_malloc) OUT of Chromium (PartitionAlloc
+#   conflicts with it). We no longer *trust* it to: `fhsLaunch` (below) does
+#   `env -u LD_PRELOAD -u LD_AUDIT -u LD_PROFILE -u LD_LIBRARY_PATH` as the
+#   runScript, and `extraBwrapArgs` masks /etc/ld.so.preload at the outer
+#   bwrap. The guarantee is now OWNED here. checks.launcher-scrub (behavioural,
+#   in `nix flake check`) + verify/30 (exit 55, real hardware) detect a
+#   regression in either our wiring or the vendor script.
 # ---------------------------------------------------------------------------
 {
   lib,
@@ -67,6 +76,7 @@
   bubblewrap,
   coreutils,
   bashInteractive,
+  writeShellScript,
 
   arch ? (lib.head (lib.splitString "-" stdenv.hostPlatform.system)),
   # { versionRelease; version; rpmUrl; rpmHash; verified; verifyLogDir ? null; }
@@ -266,19 +276,58 @@ let
       sh="$(find "$out" -name trivalent.sh -type f | head -n1)"
       grep -q 'exec bwrap' "$sh" || fail "vendor trivalent.sh no longer 'exec bwrap' -- re-check F5"
       grep -q 'readlink -f "\?''${0}' "$sh" || echo "note: trivalent.sh \$0-resolution idiom changed (non-fatal)"
+
+      # Non-fatal breadcrumbs for the LD_* preload scrub. The load-bearing gate
+      # is now checks.launcher-scrub (behavioural) + the fhsLaunch `env -u`
+      # wrapper (owns the guarantee); these just flag an upstream reword early.
+      for v in LD_PRELOAD LD_AUDIT LD_PROFILE LD_LIBRARY_PATH; do
+        grep -qF "declare -rx $v=\"\"" "$sh" \
+          || echo "WARN: trivalent.sh no longer has 'declare -rx $v=\"\"' -- checks.launcher-scrub + the env -u wrapper are now load-bearing"
+      done
+      grep -q 'ld\.so\.preload' "$sh" \
+        || echo "WARN: trivalent.sh dropped its /etc/ld.so.preload bwrap arg -- the outer extraBwrapArgs mask is now sole coverage"
+
       echo "installCheck OK: interpreter + transitive closure + load/reloc + launcher structure"
       runHook postInstallCheck
     '';
 
     passthru = { inherit fedoraGlibc; };
   };
+
+  # Own the LD_PRELOAD/LD_AUDIT/LD_PROFILE/LD_LIBRARY_PATH scrub instead of
+  # trusting trivalent.sh to keep doing it. This runs as the buildFHSEnv
+  # runScript -- BEFORE trivalent.sh's bash starts -- so an upstream rewrite that
+  # drops `declare -rx LD_PRELOAD=""` (renames it, moves it to a sourced conf,
+  # switches to `--unsetenv` ...) still cannot leak a system-wide preload
+  # (NixOS environment.memoryAllocator.provider = "graphene-hardened-light" /
+  # hardened_malloc) into Chromium. trivalent.sh's own clear, if kept, is now
+  # redundant belt-and-suspenders. LD_LIBRARY_PATH is stripped too: trivalent.sh
+  # already clears it, the patched binary resolves via RPATH + the FHS ldconfig
+  # cache, and installCheck layer 3 proves a clean-env (`env -i`) load works.
+  fhsLaunch = writeShellScript "trivalent-fhs-launch" ''
+    exec ${lib.getExe' coreutils "env"} \
+      -u LD_PRELOAD -u LD_AUDIT -u LD_PROFILE -u LD_LIBRARY_PATH \
+      ${trivalentUnwrapped}/bin/trivalent "$@"
+  '';
 in
 buildFHSEnv {
   pname = "trivalent";
   inherit version;
 
-  # Run the vendor launcher UNMODIFIED (see F5 note above).
-  runScript = "${trivalentUnwrapped}/bin/trivalent";
+  # Run the vendor launcher via a thin `env -u` shim (see fhsLaunch above); the
+  # launcher itself is still executed UNMODIFIED (see F5 note).
+  runScript = "${fhsLaunch}";
+
+  # Mask the /etc/ld.so.preload vector at the OUTER bwrap, unconditionally --
+  # independent of trivalent.sh's own conditional `--ro-bind-try /dev/null
+  # /etc/ld.so.preload` and of whether a future nixpkgs buildFHSEnv starts
+  # binding /etc/ld.so.preload from the host. Applied after buildFHSEnv's
+  # `--tmpfs /etc`, so it wins; the vendor's inner `--dev-bind / /` inherits it.
+  extraBwrapArgs = [
+    "--ro-bind-try"
+    "/dev/null"
+    "/etc/ld.so.preload"
+  ];
 
   targetPkgs =
     pkgs:

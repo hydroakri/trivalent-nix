@@ -23,6 +23,7 @@
 #   53  wrapped vs unwrapped sandbox syscall sets diverge
 #   52  real URL produced an empty DOM
 #   51  could not launch / strace
+#   55  a system LD_PRELOAD / LD_AUDIT / LD_PROFILE reached the browser process
 #   2   usage
 
 set -uo pipefail
@@ -114,6 +115,54 @@ esac
   exit 50
 }
 echo "RESULT: wrapped sandbox adequate [$W_CLASS]"
+
+# --- a system LD_PRELOAD / LD_AUDIT / LD_PROFILE must NOT reach the browser
+#     (F5 / hardened_malloc: trivalent.sh scrubs them + we own it via fhsLaunch;
+#     this is the real-hardware behavioural check -- exit 55). ---
+SENTINEL_SO=""
+sdir="$(nix --extra-experimental-features 'nix-command flakes' \
+  build --no-link --print-out-paths '.#preload-sentinel' 2>/dev/null | head -n1)"
+[ -n "$sdir" ] && [ -f "$sdir/lib/libsentinel.so" ] && SENTINEL_SO="$sdir/lib/libsentinel.so"
+
+if [ -n "$SENTINEL_SO" ]; then
+  hits="$wd/sentinel-hits.log"
+  sprof="$wd/sprof"
+  mkdir -p "$sprof"
+  : >"$hits"
+
+  SENTINEL_LOG="$hits" \
+    LD_PRELOAD="$SENTINEL_SO" LD_AUDIT="$SENTINEL_SO" LD_PROFILE="$SENTINEL_SO" \
+    "$WRAP_BIN" --headless=new --no-first-run --no-default-browser-check \
+    --disable-gpu --user-data-dir="$sprof" about:blank \
+    >"$wd/sentinel-out.log" 2>"$wd/sentinel-err.log" &
+  spid=$!
+  sleep 6
+  kids="$(pgrep -P "$spid" 2>/dev/null || true) $(pgrep -f "user-data-dir=$sprof" 2>/dev/null || true)"
+  mapped=0
+  for p in $spid $kids; do
+    [ -r "/proc/$p/maps" ] && grep -q 'libsentinel\.so' "/proc/$p/maps" 2>/dev/null && mapped=1
+  done
+  kill "$spid" 2>/dev/null || true
+  wait "$spid" 2>/dev/null || true
+  pkill -x trivalent 2>/dev/null || true
+
+  browser_hits="$(grep -E '/trivalent$|chrome_crashpad|type=zygote' "$hits" 2>/dev/null || true)"
+  if [ ! -s "$hits" ]; then
+    # nothing anywhere loaded the .so -- not even the pre-exec bwrap/bash
+    # helpers. The probe is not working; a clean "no browser hit" would be
+    # meaningless, so don't claim a pass.
+    echo "[selfcheck] WARN: sentinel probe never fired (not even on pre-exec helpers) -- skipping preload check" >&2
+  elif [ -n "$browser_hits" ] || [ "$mapped" -eq 1 ]; then
+    echo "FAIL: LD_PRELOAD/LD_AUDIT/LD_PROFILE reached the browser process" >&2
+    [ -n "$browser_hits" ] && printf '  %s\n' "$browser_hits" >&2
+    [ "$mapped" -eq 1 ] && echo "  (libsentinel.so found in a browser /proc/<pid>/maps)" >&2
+    exit 55
+  else
+    echo "[selfcheck] preload scrub OK: sentinel entered only pre-exec helpers, never the browser"
+  fi
+else
+  echo "[selfcheck] note: .#preload-sentinel unavailable -- skipping preload scrub check (non-fatal)"
+fi
 
 if [ -n "$UNWRAP_BIN" ]; then
   run_traced unwrapped "$UNWRAP_BIN" || {
