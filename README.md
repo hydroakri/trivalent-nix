@@ -58,11 +58,12 @@ Requirements and known gaps:
   and Chromium needs them for the renderer sandbox. If your hardening profile
   disables userns, this package will not run sandboxed (and won't run at all
   under the FHS wrapper).
-- **Wayland is not auto-selected.** The vendor `trivalent.conf` that picks
-  `--ozone-platform=wayland` / Vulkan lives at `/etc/trivalent/`, which the FHS
-  sandbox takes from the host, so on non-secureblue systems it is absent and
-  Chromium falls back to its defaults (often XWayland). Set `USE_WAYLAND=true`
-  in the environment, or pass `--ozone-platform=wayland`, if you want Wayland.
+- **Wayland/Vulkan flags are not applied.** The vendor `trivalent.conf` that
+  picks `--ozone-platform=wayland` / `--use-vulkan` lives at `/etc/trivalent/`,
+  which the FHS sandbox takes from the host, so it is absent on non-secureblue
+  systems. Wayland still works if the session provides it (`NIXOS_OZONE_WL=1`,
+  or pass `--ozone-platform=wayland` / `USE_WAYLAND=true`); Vulkan stays off
+  and the browser runs on GL/ANGLE-GLES.
 - **No `trivalent-selinux`.** secureblue ships a companion SELinux policy module;
   NixOS does not use SELinux, so that confinement layer is simply not present.
 - **No automatic updates.** Until the CI (deferred) exists, `pins.nix` is bumped
@@ -141,19 +142,31 @@ community re-pack, the same category as the AUR `trivalent-bin` and
 `quixaq/trivalent-nix` -- neither endorsed nor tested by secureblue. If you want
 Trivalent as upstream intends it, install a secureblue image.
 
-What this flake **keeps** that a naive `fetchurl` re-pack does not:
-
-- the three-layer supply-chain verification of the RPM (the whole point);
-- the vendor launcher `trivalent.sh` run **unmodified**, so its
-  `bwrap --cap-drop ALL` jail is preserved (quixaq execs the raw binary and
-  drops it);
-- Chromium's unprivileged-userns + seccomp-bpf renderer sandbox, checked at
-  runtime and shown identical wrapped vs unwrapped (`F4-F5-RESULTS.md`).
-
-What is still **lost** versus a real secureblue install: `trivalent-selinux`
-confinement, the `/etc/trivalent` flag configuration, image-level provenance, and
-timely updates. The binary itself is unmodified (only its ELF interpreter/RPATH
-are patched for a Fedora glibc), so the compile-time hardening secureblue builds
-into Trivalent is intact.
-
 Not affiliated with secureblue, Trivalent, or quixaq.
+
+## Kept vs degraded (measured on omen15, Trivalent 152.0.7977.82)
+
+**Kept**
+
+- Trivalent's Chromium patchset + hardened compile flags -- the binary is shipped
+  byte-for-byte, only ELF interpreter/RPATH patched for glibc 2.43.
+- Intel CET tunables (`glibc.cpu.x86_ibt=on`, `x86_shstk`) -- `trivalent.sh` run unmodified.
+- Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised -- same.
+- Renderer sandbox: namespace (user/PID/net) + seccomp-bpf + TSYNC + broker Yama
+  -- `chrome://sandbox` reports "adequately sandboxed"; strace parity wrapped vs
+  unwrapped (`F4-F5-RESULTS.md`).
+- Wayland/ozone active, HW-accelerated canvas/compositing/raster/WebGL and HW
+  video decode+encode (`chrome://gpu`).
+- Three-layer supply-chain verification of the RPM (`verify/`).
+
+**Degraded / absent**
+
+- `trivalent-selinux`: no SELinux on NixOS and no AppArmor profile -- the browser
+  process runs with **no MAC confinement**.
+- GPU process is **not sandboxed** (`chrome://gpu` -> `Sandboxed: false`) under the
+  FHS+bwrap wrap; the renderer and network sandboxes are unaffected.
+- Vulkan disabled -- secureblue's `/etc/trivalent/trivalent.conf` (which sets
+  `--use-vulkan`) is not read; runs on GL/ANGLE-GLES instead.
+- No automatic updates -- `pins.nix` bumped by hand until CI exists.
+- Yama non-broker ptrace protection off -- host `kernel.yama.ptrace_scope = 1`
+  (`security.nix`); secureblue uses `3`.
