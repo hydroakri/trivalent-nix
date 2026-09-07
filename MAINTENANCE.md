@@ -91,10 +91,33 @@ issue; resolve it with the procedures in this file.
 
 ## Key rotation (F1)
 
-A change to `SECUREBLUE_FPR` / `keyHash` is indistinguishable from key theft, so
-it is never automated. Run `./verify/00-bootstrap-key.sh` -- it fetches the key
-from two independent channels and cross-checks `build.yml`; it only appends a
-`KEY-PROVENANCE.md` row, it never writes a new fingerprint. A human edits
-`verify/fingerprint.env` + `pins.nix` `keyHash` after >= 2 independent channels
-confirm the same new value. `verify/40-review.sh` R1 fails if a fingerprint in
-git history has no matching `KEY-PROVENANCE.md` row.
+A new `SECUREBLUE_FPR` / `keyHash` is indistinguishable from key theft, so it is
+never **auto-adopted**. Two paths:
+
+### Semi-automated (the common case)
+
+`nix run .#update` / `update-trivalent.yml` detects the new key and checks four
+independent channels: (A) `repo.secureblue.dev`, (B) the key committed in
+`secureblue/secureblue`, (C) `%_gpg_name` in `secureblue/Trivalent`
+`build.yml`, (D) whether the **old** key -- fetched from `keyserver.ubuntu.com`
+-- carries a *verified* signature over the new key (a self-certified rotation;
+an endpoint-only attacker can't forge this).
+
+- **All four pass** -> the updater rewrites `verify/fingerprint.env` +
+  `pins.nix` `keyHash` + appends a `KEY-PROVENANCE.md` row ending
+  `PROPOSED-BY-BOT`, exits 42. The workflow opens a `needs-human-approval` PR
+  that is **not auto-merged**. `verify/40-review.sh` R1 fails while the row says
+  `PROPOSED-BY-BOT`.
+- **You**: confirm the rotation via a channel not in A-D -- secureblue's
+  announcement / Discord / release notes -- then on the PR branch edit the last
+  `KEY-PROVENANCE.md` row, replacing `PROPOSED-BY-BOT -- confirm ...` with your
+  name and the channel you used. Push. `ci` goes green; merge.
+
+### Fully manual (evidence incomplete -> exit 40)
+
+If any of A-D fails (channels disagree, no self-certification, keyserver down):
+run `./verify/00-bootstrap-key.sh` (checks A/B/C, only ever appends a row,
+never writes a fingerprint), independently confirm >= 2 channels agree on the
+new value, then hand-edit `verify/fingerprint.env` + `pins.nix` `keyHash` +
+add a `KEY-PROVENANCE.md` row with your name. `40-review.sh` R1/R4 block a
+fingerprint or trusted-root value in git history with no matching row.

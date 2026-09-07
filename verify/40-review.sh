@@ -45,10 +45,13 @@ if [ -d .git ]; then
   fi
   # current value must match the newest KEY-PROVENANCE.md row
   cur="$(sed -n 's/^SECUREBLUE_FPR=//p' "$V/fingerprint.env")"
-  if [ -f KEY-PROVENANCE.md ] && ! tail -n1 KEY-PROVENANCE.md | grep -qF "$cur"; then
-    bad "current SECUREBLUE_FPR ($cur) is not the one in the last KEY-PROVENANCE.md row"
+  crow="$(grep -F "$cur" KEY-PROVENANCE.md 2>/dev/null | tail -n1)"
+  if [ -z "$crow" ]; then
+    bad "current SECUREBLUE_FPR ($cur) has no KEY-PROVENANCE.md row"
+  elif printf '%s' "$crow" | grep -q 'PROPOSED-BY-BOT'; then
+    bad "current SECUREBLUE_FPR row is still PROPOSED-BY-BOT -- a human must confirm a further independent channel and put their name in KEY-PROVENANCE.md before this merges (F1)"
   else
-    good "current SECUREBLUE_FPR is backed by the latest KEY-PROVENANCE.md row"
+    good "current SECUREBLUE_FPR is backed by a human-confirmed KEY-PROVENANCE.md row"
   fi
 else
   bad "not a git repo -- cannot audit fingerprint history"

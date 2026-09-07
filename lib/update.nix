@@ -13,12 +13,18 @@
 #   20  HALT: repodata advertises a release GitHub never published (F3)
 #   22  HALT: version map unparseable
 #   30  HALT: SLSA provenance format changed (F2)
-#   40  HALT: signing key changed -- never auto-adopted (F1)
+#   40  HALT: signing key changed, evidence incomplete -- fully manual (F1)
 #   41  HALT: vendored Sigstore trusted root does not match its pin
+#   42  PROPOSED: signing key rotation -- 4 independent channels agree AND the
+#       old key signed the new one; anchor files rewritten, kind="key-rotation"
+#       emitted. The workflow opens a needs-human-approval PR and does NOT
+#       auto-merge; 40-review.sh R1 keeps it un-mergeable until a human confirms
+#       a further channel and signs the KEY-PROVENANCE.md row.
 #   11/12/13  a verification layer failed
 #   2   usage / wrong directory
 #
-# On any HALT it writes ./HALT.txt (one line: reason) and touches nothing else.
+# On a HALT it writes ./HALT.txt and touches nothing. On 42 it rewrites
+# verify/fingerprint.env + pins.nix + KEY-PROVENANCE.md and emits JSON.
 {
   writeShellApplication,
   curl,
@@ -41,8 +47,12 @@
 }:
 writeShellApplication {
   name = "trivalent-update";
-  # SC2001: `sed 's/^/prefix/'` to indent piped sub-command output is fine here.
-  excludeShellChecks = [ "SC2001" ];
+  # SC2001: `sed -s'` to indent piped output. SC2016: literal backticks in a
+  # markdown table row printf.
+  excludeShellChecks = [
+    "SC2001"
+    "SC2016"
+  ];
   runtimeInputs = [
     curl
     gnupg
@@ -86,7 +96,14 @@ writeShellApplication {
     PINNED_VR="$(jq -r ".''${ARCH}.versionRelease" <<<"$PJ")"
     sri() { nix "''${NIXFLAGS[@]}" hash convert --hash-algo sha256 --to sri "$1"; }
 
-    # ---- F1 preflight: never auto-adopt a new key or trusted root ------------
+    envv() { sed -n "s/.*$1:=\\([^}\"]*\\).*/\\1/p" verify/fingerprint.env; }
+    GH_SB="$(envv SECUREBLUE_GH_REPO)"
+    GH_SB_PATH="$(envv SECUREBLUE_GPG_COMMITTED_PATH)"
+    GH_TV="$(envv TRIVALENT_GH_REPO)"
+
+    # ---- F1 preflight: never auto-ADOPT a new key. If one appears, gather
+    #      independent evidence and PROPOSE a needs-human PR (exit 42); if the
+    #      evidence is incomplete, full HALT (exit 40).
     say "preflight: signing key + Sigstore trusted root"
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
@@ -97,10 +114,54 @@ writeShellApplication {
     chmod 700 "$GNUPGHOME"
     gpg --quiet --import "$tmp/key.gpg" 2>/dev/null || true
     key_fpr="$(gpg --list-keys --with-colons 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
+
     if [ "$(sri "$key_sha")" != "$KEY_HASH_PINNED" ] || [ "$key_sha" != "$GPG_SHA256" ] || [ "$key_fpr" != "$FPR" ]; then
-      halt "F1 signing key changed: served fpr=$key_fpr sha256=$key_sha ; pinned fpr=$FPR sha256=$GPG_SHA256. Never auto-adopt -- MAINTENANCE.md 'Key rotation'."
+      say "served signing key differs from the pin -- gathering rotation evidence"
+      reasons=()
+      # channel B: the key committed in secureblue/secureblue (different host+path)
+      gh api "repos/$GH_SB/contents/$GH_SB_PATH" -H "Accept: application/vnd.github.raw" \
+        > "$tmp/B.gpg" 2>/dev/null || reasons+=("channel B (github $GH_SB) fetch failed")
+      b_sha="$(sha256sum "$tmp/B.gpg" 2>/dev/null | cut -d' ' -f1)"
+      [ -n "$b_sha" ] && [ "$b_sha" = "$key_sha" ] || reasons+=("channel A (repo.secureblue.dev) and B (github) disagree")
+      # channel C: %_gpg_name in the Trivalent build workflow
+      c_fpr="$(gh api "repos/$GH_TV/contents/.github/workflows/build.yml" -H "Accept: application/vnd.github.raw" 2>/dev/null \
+              | grep -oiE '_gpg_name[[:space:]]+[0-9a-f]{40}' | grep -oiE '[0-9a-f]{40}' | tr 'a-f' 'A-F' | head -1)"
+      [ "$c_fpr" = "$key_fpr" ] || reasons+=("build.yml %_gpg_name ($c_fpr) != served key fpr ($key_fpr)")
+      # channel D: fetch the OLD pinned key from an independent keyserver and
+      # check it CERTIFIED the new key (a self-signed rotation -- an
+      # endpoint-only attacker cannot produce this without the old private key)
+      old16="$(printf '%s' "$FPR" | tail -c 16 | tr 'A-F' 'a-f')"
+      gpg --batch --keyserver hkps://keyserver.ubuntu.com --keyserver-options timeout=20 \
+        --recv-keys "$FPR" 2>/dev/null || reasons+=("could not fetch the old key $FPR from keyserver.ubuntu.com")
+      if gpg --check-sigs --with-colons "$key_fpr" 2>/dev/null \
+         | awk -F: -v k="$old16" '$1=="sig" && $2=="!" && tolower($5) ~ k {ok=1} END{exit !ok}'; then
+        say "channel D: the pinned key $FPR has a verified signature over $key_fpr"
+      else
+        reasons+=("the pinned key $FPR has NOT verifiably signed the new key $key_fpr (no self-certified rotation)")
+      fi
+
+      if [ "''${#reasons[@]}" -eq 0 ]; then
+        say "all machine checks pass -- PROPOSING a needs-human key-rotation PR (never auto-merged)"
+        new_sri="$(sri "$key_sha")"
+        sed -i "s|^SECUREBLUE_FPR=.*|SECUREBLUE_FPR=$key_fpr|; s|^SECUREBLUE_GPG_SHA256=.*|SECUREBLUE_GPG_SHA256=$key_sha|" verify/fingerprint.env
+        sed -i "s|keyHash = \"[^\"]*\"|keyHash = \"$new_sri\"|" pins.nix
+        nixfmt pins.nix
+        printf '| %s | `%s` | `%s` | repo.secureblue.dev OK | github %s OK | build.yml OK + old key signed new (keyserver.ubuntu.com) | PROPOSED-BY-BOT -- confirm a further independent channel (secureblue announcement / Discord / release notes) then replace this with your name |\n' \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$key_fpr" "$key_sha" "$GH_SB" >> KEY-PROVENANCE.md
+        jq -cn --arg old "$FPR" --arg new "$key_fpr" \
+          --arg msg "signing key: $(printf '%.8s' "$FPR") -> $(printf '%.8s' "$key_fpr") (PROPOSED -- needs human)" \
+          --arg body "Auto-detected key rotation. Machine checks that ALL passed: channel A (repo.secureblue.dev) == B (github $GH_SB), build.yml %_gpg_name == new fpr, and the pinned key $FPR carries a *verified* certification over $key_fpr (old key fetched from keyserver.ubuntu.com). NOT auto-merged. A human must (1) confirm the rotation via a channel not above -- secureblue's announcement / Discord / release notes -- and (2) replace 'PROPOSED-BY-BOT' in the new KEY-PROVENANCE.md row with their name. \`ci\` (verify/40-review.sh R1) blocks merge until then." \
+          '[{attrPath:"trivalent-signing-key", kind:"key-rotation", oldVersion:$old, newVersion:$new,
+             files:["verify/fingerprint.env","pins.nix","KEY-PROVENANCE.md"],
+             commitMessage:$msg, commitBody:$body}]'
+        say "key rotation PROPOSED: $FPR -> $key_fpr"
+        exit 42
+      fi
+
+      halt "F1 signing key changed and cannot be auto-proposed: $(IFS=';'; echo "''${reasons[*]}"). Fully manual -- MAINTENANCE.md 'Key rotation'."
       exit 40
     fi
+
     tr_sha="$(sha256sum verify/sigstore-trusted-root.json | cut -d' ' -f1)"
     if [ "$tr_sha" != "$TR_SHA256_PINNED" ]; then
       halt "verify/sigstore-trusted-root.json sha256 $tr_sha != pinned $TR_SHA256_PINNED -- MAINTENANCE.md 'Sigstore trusted-root rotation'."

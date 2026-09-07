@@ -108,7 +108,21 @@ Nix-built, dependency-pinned PATH; `00` is the human key-rotation gate; `30` /
    `files` / `commitMessage`).
 
 Exit codes: `0` bump-or-no-op · `20` F3 · `22` unparseable · `30` F2 · `40` key
-changed (F1) · `41` trusted-root mismatch · `11/12/13` a layer failed.
+changed, evidence incomplete → HALT · `41` trusted-root mismatch · `42` key
+rotation **PROPOSED** · `11/12/13` a layer failed.
+
+**Key rotation (F1)** is semi-automated. If `repo.secureblue.dev` serves a new
+signing key, the updater checks four independent channels -- R2, the key
+committed in `secureblue/secureblue`, `%_gpg_name` in `secureblue/Trivalent`
+`build.yml`, and (from `keyserver.ubuntu.com`) whether the **old** key carries a
+*verified* certification over the new one. All four must agree, and the new key
+must be self-certified by the old private key -- something an endpoint-only
+attacker cannot produce. If so it rewrites `fingerprint.env` / `pins.nix` /
+`KEY-PROVENANCE.md` and exits 42; the workflow opens a `needs-human-approval`
+PR that is **never auto-merged**. `verify/40-review.sh` R1 fails while the row
+still says `PROPOSED-BY-BOT`, so `ci` blocks the merge until a human confirms a
+further channel (secureblue's announcement / Discord) and puts their name in
+the row. Any check missing → exit 40, full HALT, fully manual.
 
 `.github/workflows/`:
 

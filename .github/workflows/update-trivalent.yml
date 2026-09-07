@@ -43,19 +43,26 @@ jobs:
         id: update
         run: |
           set +e
-          nix run .#update
+          nix run .#update > update.json
           echo "rc=$?" >> "$GITHUB_OUTPUT"
+          cat update.json
 
       - name: Classify the outcome
         id: outcome
         run: |
           rc="${{ steps.update.outputs.rc }}"
+          # rc 42 = a self-certified key rotation -- PROPOSE, never auto-merge
+          if [ "$rc" = "42" ]; then
+            echo "kind=key-rotation" >> "$GITHUB_OUTPUT"
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$rc" != "0" ]; then
             case "$rc" in
               20) reason="F3: repodata advertises a release GitHub never published" ;;
               22) reason="version map unparseable" ;;
               30) reason="F2: SLSA provenance format changed" ;;
-              40) reason="F1: signing key changed -- needs human cross-check" ;;
+              40) reason="F1: signing key changed, evidence incomplete -- fully manual" ;;
               41) reason="Sigstore trusted root does not match its pin" ;;
               1[123]) reason="a supply-chain verification layer failed" ;;
               *) reason="updater exited $rc" ;;
@@ -71,20 +78,27 @@ jobs:
             exit 1
           fi
           # rc 0: bump or no-op
-          changed="$(git status --porcelain)"
-          if [ -z "$changed" ]; then
+          if [ -z "$(git status --porcelain)" ]; then
             echo "no-op -- nothing to do"; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          # working-tree guard: the updater may only touch these
+          echo "kind=version" >> "$GITHUB_OUTPUT"
+          # working-tree guard: a version bump may only touch these
           if git status --porcelain | grep -vE '^.M? (pins\.nix|verify/logs/)' ; then
-            echo "::error::updater changed files it must not"
+            echo "::error::updater changed files it must not for a version bump"
             git checkout -- . && git clean -fd
             exit 1
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
-          {
-            echo "NEW=$(sed -n 's/.*versionRelease = "\([^"]*\)".*/\1/p' pins.nix | head -1)"
-          } >> "$GITHUB_OUTPUT"
+          echo "NEW=$(sed -n 's/.*versionRelease = "\([^"]*\)".*/\1/p' pins.nix | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Guard the key-rotation working tree
+        if: steps.outcome.outputs.kind == 'key-rotation'
+        run: |
+          if git status --porcelain | grep -vE '^.M? (verify/fingerprint\.env|pins\.nix|KEY-PROVENANCE\.md)$' ; then
+            echo "::error::key-rotation touched files it must not"
+            git checkout -- . && git clean -fd
+            exit 1
+          fi
 
       - name: Pre-PR validation
         if: steps.outcome.outputs.proceed == 'true'
@@ -96,23 +110,30 @@ jobs:
         id: pr
         if: steps.outcome.outputs.proceed == 'true'
         run: |
-          NEW="${{ steps.outcome.outputs.NEW }}"
-          BR="bot/trivalent-$NEW"
+          msg="$(jq -r '.[0].commitMessage' update.json)"
+          body="$(jq -r '.[0].commitBody' update.json)"
+          mapfile -t files < <(jq -r '.[0].files[]' update.json)
+          if [ "${{ steps.outcome.outputs.kind }}" = "key-rotation" ]; then
+            new8="$(jq -r '.[0].newVersion' update.json | cut -c1-8)"
+            BR="bot/key-rotation-$new8"
+            labels=(--label automated --label security --label needs-human-approval)
+          else
+            NEW="${{ steps.outcome.outputs.NEW }}"
+            BR="bot/trivalent-$NEW"
+            labels=(--label automated --label dependencies)
+          fi
           git push origin --delete "$BR" 2>/dev/null || true
           git checkout -B "$BR"
-          git add pins.nix verify/logs
-          git commit -m "trivalent: -> $NEW" -m "layers 1+2+3 PASS (live slsa-verifier + offline cosign in the build graph)"
+          git add "${files[@]}"
+          git commit -m "$msg" -m "$body"
           git push -u origin "$BR"
-          PR="$(gh pr create --base main --head "$BR" \
-            --title "trivalent: -> $NEW" \
-            --label automated --label dependencies \
-            --body "Auto-update to \`$NEW\`. pins.nix rewritten by \`nix run .#update\`; passed \`nix flake check\` + \`nix build\`. verify/logs/$NEW/ attached.")"
+          PR="$(gh pr create --base main --head "$BR" --title "$msg" "${labels[@]}" --body "$body")"
           echo "pr_number=$(gh pr view "$PR" --json number --jq .number)" >> "$GITHUB_OUTPUT"
           echo "branch=$BR" >> "$GITHUB_OUTPUT"
 
       - name: Wait for CI, merge or roll back
         id: merge
-        if: steps.pr.outputs.pr_number != ''
+        if: steps.pr.outputs.pr_number != '' && steps.outcome.outputs.kind != 'key-rotation'
         run: |
           PR="${{ steps.pr.outputs.pr_number }}"
           BR="${{ steps.pr.outputs.branch }}"
