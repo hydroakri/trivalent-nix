@@ -1,7 +1,7 @@
 == layer 1: rpm package body signature ==
 -- rpmkeys --dbpath (temp) --import <verified key>
--- rpmkeys --dbpath (temp) -Kv /tmp/tmp.jFkJYfgpVU/trivalent-152.0.7977.82-447128.x86_64.rpm
-/tmp/tmp.jFkJYfgpVU/trivalent-152.0.7977.82-447128.x86_64.rpm:
+-- rpmkeys --dbpath (temp) -Kv /tmp/tmp.uchBbPgwMX/trivalent-152.0.7977.82-447128.x86_64.rpm
+/tmp/tmp.uchBbPgwMX/trivalent-152.0.7977.82-447128.x86_64.rpm:
     Header V4 EdDSA/SHA512 Signature, key ID f47b3e41: OK
     Header SHA256 digest: OK
     Header SHA1 digest: OK

@@ -1,8 +1,10 @@
 # trivalent-nix
 
 A standalone Nix flake that packages [secureblue Trivalent](https://github.com/secureblue/Trivalent)
-(hardened Chromium) from the upstream signed RPM, behind **three independent
-supply-chain checks** whose logs ship inside the built package.
+(hardened Chromium) from the upstream signed RPM. The **three-layer supply-chain
+verification runs in the build graph** (`lib/verify.nix`, pure + offline): the
+RPM only reaches `src` after its body signature, the signed repodata, and the
+SLSA provenance all check out, so `nix build` *is* the verification.
 
 Packaging technique (RPM unpack + FHS wrap) is borrowed from
 [`quixaq/trivalent-nix`](https://github.com/quixaq/trivalent-nix); its
@@ -13,7 +15,7 @@ nix build github:hydroakri/trivalent-nix#trivalent
 nix run   github:hydroakri/trivalent-nix#trivalent
 ```
 
-Output: `packages.x86_64-linux.trivalent` (+ `.default`), `nixosModules.default`.
+Output: `packages.x86_64-linux.{trivalent,supply-chain}`, `nixosModules.default`.
 
 ## Adding it to a NixOS system
 
@@ -58,7 +60,7 @@ github:hydroakri/trivalent-nix#trivalent`.
 
 | | |
 |---|---|
-| RPM body signature + signed repodata + SLSA provenance, key `26B4…3E41`, logs in `$out/share/trivalent/supply-chain-logs/` | **done** -- `verify/10-verify-supply-chain.sh` exit 0 |
+| RPM body signature + signed repodata + SLSA-provenance content, key `26B4…3E41`, in the build graph | **done** -- `lib/verify.nix` / `checks.supply-chain`; Sigstore chain carried by the pinned `intotoHash` (re-verified live by `verify/10-…` before a pin) |
 | launches, renders a real page, FHS wrapper doesn't downgrade the sandbox | **done** -- `verify/30-sandbox-selfcheck.sh`; `F4-F5-RESULTS.md` |
 | F4 (glibc): binary needs `GLIBC_2.43`, default `glibcStrategy = "fedora-rpm"` | **done** -- `F4-F5-RESULTS.md` |
 | F5 (sandbox): unpriv userns + seccomp-bpf, wrapped == unwrapped, no setuid helper | **done** -- `F4-F5-RESULTS.md` |
@@ -72,27 +74,30 @@ github:hydroakri/trivalent-nix#trivalent`.
 |---|---|---|
 | `00-bootstrap-key.sh` | acquire the signing key from **two independent channels**, check both against `fingerprint.env`, cross-check `build.yml`; append a `KEY-PROVENANCE.md` row | `0` ok · `40` mismatch, writes nothing (F1) · `41` network |
 | `20-version-map.sh <arch>` | derive "current version" from repodata **and** GitHub independently, classify any disagreement | `0` match (prints `VERSION=`) · `10` repodata lag (retries) · `21` lag past budget · `20` repodata ahead / tag absent = ALARM (F3) · `22` unparseable |
-| `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | layer 1 `rpmkeys -Kv` · layer 2 `gpg --verify repomd.xml.asc` + bind RPM sha256 to the signed `primary.xml` · layer 3 `slsa-verifier` with builder + source-uri + source-branch pinned | `0` = **RESULT: PASS** (all three) · `11/12/13` layer 1/2/3 failed · `30` provenance format changed (F2, ≠ missing) · `31` provenance missing · `40` key mismatch |
+| `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the same 3 layers as `lib/verify.nix` **plus** the live `slsa-verifier` Sigstore/Rekor chain; prints a ready-to-paste `pins.nix` block. Run this before taking a pin. | `0` = **RESULT: PASS** · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
 | `30-sandbox-selfcheck.sh [url]` | strace the wrapped **and** unwrapped browser on a real URL; assert userns + seccomp-bpf, no setuid path, sandbox syscall sets match, DOM non-empty | `0` ok · `50` sandbox inadequate · `53` wrapped≠unwrapped · `52` empty DOM |
 | `40-review.sh` | **independent review layer** -- definition-drift, version-map coverage, pass-criterion validity. Run after any edit to `00/10/20` or `fingerprint.env` | `0` = REVIEW: PASS |
 | `99-negative-tests.sh` | proves the fail-closed paths (tamper, key flip, F2 30-vs-31, F3 reverse) actually return those codes | `0` = all fail-closed |
 
-The scripts self-bootstrap their CLIs via `nix shell` if missing, or use
-`nix develop` for the full toolchain.
+These four stay shell because they need network / wall-clock time / a real
+kernel -- not expressible as a pure build. They self-bootstrap their CLIs via
+`nix shell`, or use `nix develop`. The 3-layer *verification* itself is
+`lib/verify.nix` (pure, in the build graph); `10-…` is the wrapper that also
+runs the live `slsa-verifier` and emits the pin block.
 
 ### One update cycle (manual -- no CI yet)
 
 ```
 ./verify/20-version-map.sh x86_64                 # -> VERSION=<v-r>   (exit 0)
-./verify/10-verify-supply-chain.sh <v-r> x86_64   # -> RESULT: PASS + SRI=
-# edit pins.nix with <v-r> / version / url / SRI; keep verify/logs/<v-r>/ committed
+./verify/10-verify-supply-chain.sh <v-r> x86_64   # -> RESULT: PASS + a pins.nix block
+# paste the block into pins.nix; keep verify/logs/<v-r>/ committed
 ./verify/40-review.sh                             # -> REVIEW: PASS
-nix build .#trivalent && ./verify/30-sandbox-selfcheck.sh https://example.org
+nix flake check                                   # lib/verify.nix re-checks offline
+./verify/30-sandbox-selfcheck.sh https://example.org
 git commit
 ```
 
-`20-version-map.sh` must reach exit 0 **before** `10-verify` runs; `10-verify`
-must reach exit 0 **before** `pins.nix` is touched. Order is not optional.
+Order is not optional: `20` exit 0 before `10`; `10` exit 0 before `pins.nix`.
 
 ## Trust anchors (`verify/fingerprint.env`)
 
