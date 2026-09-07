@@ -30,7 +30,7 @@
 # On any outcome, verify/logs/<version-release>/ is written and is meant to be
 # copied verbatim into the package $out (see lib/mk-trivalent.nix).
 
-NEED_TOOLS="curl gpg gh jq python3 rpmkeys slsa-verifier sha256sum gzip zstd"
+NEED_TOOLS="curl gpg gh jq xmllint rpmkeys slsa-verifier sha256sum gzip zstd"
 # shellcheck source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
 
@@ -88,7 +88,7 @@ set +e
     echo "FAIL: repomd.xml signature not a valid signature from $SECUREBLUE_FPR"
   else
     # primary.xml, verified by the checksum inside the *signed* repomd.xml
-    pl="$(python3 "$VERIFY_DIR/lib/repomd.py" primary-location "$work/repomd.xml")"
+    pl="$(repomd_primary_location "$work/repomd.xml")"
     p_href="$(printf '%s' "$pl" | cut -f1)"
     p_ct="$(printf '%s' "$pl" | cut -f2)"
     p_cs="$(printf '%s' "$pl" | cut -f3)"
@@ -99,7 +99,7 @@ set +e
       echo "FAIL: primary.xml checksum mismatch"
     else
       decompress_to "$work/primary.bin" "$work/primary.xml"
-      row="$(python3 "$VERIFY_DIR/lib/repomd.py" find-package "$work/primary.xml" trivalent "$ARCH")" || {
+      row="$(repomd_newest_pkg "$work/primary.xml" trivalent "$ARCH")" || {
         echo "FAIL: no trivalent/$ARCH in primary.xml"
         row=""
       }
@@ -234,7 +234,7 @@ if [ "$L1" -eq 0 ] && [ "$L2" -eq 0 ] && [ "$L3" -eq 0 ]; then
   echo "RESULT: PASS" | tee -a "$LOGDIR/summary.txt"
 
   sri() { nix hash to-sri --type sha256 "$1" 2>/dev/null || nix --extra-experimental-features nix-command hash convert --hash-algo sha256 --to sri "$1"; }
-  p_href="$(python3 "$VERIFY_DIR/lib/repomd.py" primary-location "$work/repomd.xml" | cut -f1)"
+  p_href="$(repomd_primary_location "$work/repomd.xml" | cut -f1)"
   ver="${VR%-*}"
 
   cat <<EOF

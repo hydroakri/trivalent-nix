@@ -82,13 +82,14 @@
               gnupg
               gh
               jq
-              python3
+              libxml2 # xmllint -- repodata parsing in verify/10 + verify/20
               rpm
               slsa-verifier
               cpio
               gzip
               zstd
               cacert
+              busybox # fixture HTTP server for verify/99-negative-tests.sh
             ];
           };
         }

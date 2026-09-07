@@ -16,12 +16,16 @@
 # F5 (sandbox call-path parity under the FHS wrapper) -- STATUS: measured on
 #   omen15, see ../F4-F5-RESULTS.md. The RPM ships NO setuid chrome-sandbox
 #   helper (find: none), so there is no setuid path for buildFHSEnv to break.
-#   The vendor launcher trivalent.sh runs the browser inside its own
-#   `bwrap --cap-drop ALL` jail; Chromium then brings up its unprivileged
-#   user-namespace + seccomp-bpf sandbox for renderers. We run the UNMODIFIED
-#   trivalent.sh as the FHS runScript so that outer jail is preserved rather
-#   than dropped (quixaq execs the raw binary and loses it). verify/30-sandbox-
-#   selfcheck.sh is the runtime gate that this did not silently downgrade.
+#   Chromium's real security boundary -- the unprivileged user-namespace +
+#   seccomp-bpf sandbox for renderers -- is unaffected by how we launch it.
+#   The vendor launcher trivalent.sh additionally wraps the browser in its own
+#   `bwrap --cap-drop ALL` jail; secureblue's own maintainers describe this
+#   outer layer as low-value ("mostly to remove hardened_malloc, not
+#   significant security" -- NixOS/nixpkgs#531708), and the nixpkgs PR drops
+#   it. We keep it only because running trivalent.sh UNMODIFIED as the FHS
+#   runScript costs nothing and means zero edits to a security-sensitive
+#   script (quixaq execs the raw binary and loses the layer). verify/30-
+#   sandbox-selfcheck.sh is the runtime gate that nothing silently downgraded.
 # ---------------------------------------------------------------------------
 {
   lib,
@@ -169,7 +173,7 @@ let
         newrpath="${fedoraGlibc}/usr/lib64:${lib.makeLibraryPath runtimeLibs}"
         for elf in "$binroot/trivalent" "$binroot/chrome_crashpad_handler"; do
           [ -f "$elf" ] || continue
-          patchelf --set-interpreter "$interp" "$elf" || true
+          patchelf --set-interpreter "$interp" "$elf"
           old="$(patchelf --print-rpath "$elf" 2>/dev/null || true)"
           patchelf --set-rpath "$newrpath''${old:+:$old}" "$elf"
         done
@@ -310,7 +314,13 @@ buildFHSEnv {
   meta = {
     description = "secureblue Trivalent (hardened Chromium), repackaged from the signed RPM with 3-layer supply-chain verification";
     homepage = "https://github.com/secureblue/Trivalent";
-    license = lib.licenses.bsd3; # Chromium
+    # Chromium's tree is BSD-3 plus GPLv2-only and Apache-2.0 components
+    # (matches nixpkgs' own chromium / the pending nixpkgs trivalent PR).
+    license = with lib.licenses; [
+      bsd3
+      gpl2Only
+      asl20
+    ];
     mainProgram = "trivalent";
     platforms = [ "x86_64-linux" ];
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
