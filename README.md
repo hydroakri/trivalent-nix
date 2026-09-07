@@ -43,6 +43,9 @@ Just the package, no module: `environment.systemPackages = [
 trivalent-nix.packages.x86_64-linux.trivalent ];` or `nix profile install
 github:hydroakri/trivalent-nix#trivalent`.
 
+No binary cache is published -- `.#trivalent` is a repack of a prebuilt RPM
+(FODs + patchelf + FHS wrap), so it builds locally in a couple of minutes.
+
 ### Requirements / caveats
 
 - **Unprivileged user namespaces** must be available (kernel default; some
@@ -57,7 +60,7 @@ github:hydroakri/trivalent-nix#trivalent`.
   is the stand-in; see "Kept vs degraded".
 - **Updates are unattended** -- `.github/workflows/update-trivalent.yml` runs
   `nix run .#update` daily, gates on `nix flake check`, auto-merges on green,
-  pushes to the Attic cache. F1 events halt to a GitHub issue (see "Automation").
+  F1 events halt to a GitHub issue (see "Automation").
 
 ## Status
 
@@ -111,8 +114,8 @@ changed (F1) · `41` trusted-root mismatch · `11/12/13` a layer failed.
 
 | workflow | trigger | does |
 |---|---|---|
-| `ci.yml` | PR + push to main | `nix flake check` + `nix build .#trivalent .#supply-chain` + `verify/40-review.sh`; Attic push on main. **The required status check.** |
-| `update-trivalent.yml` | daily `0 6 * * *` | `nix run .#update`; on HALT -> open/update a `blocked`+`security` issue; else working-tree guard (only `pins.nix` + `verify/logs/` may change) -> pre-PR `nix flake check` -> PR `bot/trivalent-<v>` -> **auto-merge on green** (wait / 3x-retry / rollback-and-close on red) -> Attic push. |
+| `ci.yml` | PR + push to main | `nix flake check` + `nix build .#trivalent .#supply-chain` + `verify/40-review.sh`. **The required status check.** |
+| `update-trivalent.yml` | daily `0 6 * * *` | `nix run .#update`; on HALT -> open/update a `blocked`+`security` issue; else working-tree guard (only `pins.nix` + `verify/logs/` may change) -> pre-PR `nix flake check` -> PR `bot/trivalent-<v>` -> **auto-merge on green** (wait / 3x-retry / rollback-and-close on red). |
 | `update-flake-lock.yml` | daily `0 2 * * *` | channel health-gate -> staleness (only if `.#trivalent.drvPath` moves) -> `nix flake update` -> guard `^ M flake.lock$` -> `nix flake check` + build (the drift `installCheckPhase` is the gate) -> PR -> auto-merge/rollback. |
 
 **Fully unattended.** A wrong auto-pin -> `checks.supply-chain` /
@@ -121,7 +124,7 @@ decisions (adopting a rotated signing key, rotating the Sigstore trusted root)
 halt to a GitHub issue and are done by a human per `MAINTENANCE.md` -- the
 updater detects and stops, never adopts.
 
-Repo prerequisites: secrets `GH_TOKEN_FOR_UPDATES` + `ATTIC_TOKEN`; "Allow
+Repo prerequisites: secret `GH_TOKEN_FOR_UPDATES`; "Allow
 auto-merge" enabled; a branch-protection rule on `main` requiring `ci`.
 
 ### Bump by hand

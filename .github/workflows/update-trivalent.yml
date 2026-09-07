@@ -1,12 +1,14 @@
 name: update-trivalent
 
 # Unattended: detect a new Trivalent release -> verify it (3 layers, live) ->
-# rewrite pins.nix -> PR -> nix flake check gates -> auto-merge on green ->
-# push to the Attic cache. F1 events (key / Sigstore trusted-root change) HALT
-# to a GitHub issue and never touch pins.nix.
+# rewrite pins.nix -> PR -> nix flake check gates -> auto-merge on green.
+# F1 events (key / Sigstore trusted-root change) HALT to a GitHub issue and
+# never touch pins.nix. No binary cache -- the package is a repack of a
+# prebuilt RPM, so consumers build it locally in minutes.
 #
-# Repo prerequisites: secrets GH_TOKEN_FOR_UPDATES + ATTIC_TOKEN; "Allow
-# auto-merge" on; a branch-protection rule on main requiring the `ci` check.
+# Repo prerequisites: secret GH_TOKEN_FOR_UPDATES; "Allow auto-merge" on; a
+# branch-protection rule on main requiring the `ci` check; labels blocked +
+# security.
 
 on:
   workflow_dispatch:
@@ -26,9 +28,6 @@ env:
 jobs:
   update:
     runs-on: ubuntu-latest
-    outputs:
-      pr: ${{ steps.pr.outputs.pr_number }}
-      merged: ${{ steps.merge.outputs.merged }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -39,18 +38,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - uses: ryanccn/attic-action@5635a15ef0c5462194ffbd05d1daeddc74625c3a # v0.5.0
-        with:
-          endpoint: https://cache.hydroakri.cc
-          cache: cachix
-          token: ${{ secrets.ATTIC_TOKEN }}
-      - name: LanTian read-only substituter
-        run: |
-          mkdir -p ~/.config/nix
-          {
-            echo "extra-substituters = https://attic.xuyh0120.win/lantian"
-            echo "extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
-          } >> ~/.config/nix/nix.conf
 
       - name: Run the updater
         id: update
@@ -140,32 +127,9 @@ jobs:
             if [ "$ok" != true ]; then
               echo "::error::merge kept failing -- PR $PR left open"; exit 1
             fi
-            echo "merged=true" >> "$GITHUB_OUTPUT"
           else
             echo "::error::CI failed or timed out -- rolling back"
             gh pr close "$PR" --comment "CI red; closing automatically. main keeps the previous pins.nix."
             git push origin --delete "$BR" 2>/dev/null || true
             exit 1
           fi
-
-  publish:
-    needs: update
-    if: needs.update.outputs.merged == 'true'
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          ref: main
-          persist-credentials: false
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - uses: ryanccn/attic-action@5635a15ef0c5462194ffbd05d1daeddc74625c3a # v0.5.0
-        with:
-          endpoint: https://cache.hydroakri.cc
-          cache: cachix
-          token: ${{ secrets.ATTIC_TOKEN }}
-      - run: |
-          nix build .#trivalent .#supply-chain --print-out-paths --no-link \
-            | xargs attic push cachix
