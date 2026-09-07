@@ -18,6 +18,11 @@
   keyUrl = "https://repo.secureblue.dev/secureblue.gpg";
   keyHash = "sha256-QNitJxS7CYcxU2aNnGRzYqzEhneiwN77DH1ldgQf1VU=";
 
+  # sha256 of verify/sigstore-trusted-root.json (vendored). lib/verify.nix
+  # refuses to build if the file on disk doesn't match. Rotate ~yearly when
+  # Sigstore announces a root change -- procedure in MAINTENANCE.md.
+  sigstoreTrustedRootSha256 = "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66";
+
   x86_64 = {
     versionRelease = "152.0.7977.82-447128"; # trivalent-x86_64-vr
     version = "152.0.7977.82"; # trivalent-x86_64-ver

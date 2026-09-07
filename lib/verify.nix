@@ -1,19 +1,18 @@
 # Pure, offline re-verification of the pinned RPM, in the build graph.
 # `$out/trivalent.rpm` only exists if all three layers pass, so mk-trivalent's
 # `src` cannot be an unverified RPM. `$out/supply-chain.log` is the transcript
-# (it also ships inside the package).
+# (it also ships inside the package). NO network: every input is a FOD, and
+# cosign runs offline against the vendored Sigstore trusted root.
 #
-#   layer 1  rpm body signature      -- rpmkeys -Kv against the pinned key
-#   layer 2  signed repodata         -- gpg --verify repomd.xml.asc, then bind
-#            the RPM's sha256 to the <checksum> in the signed primary.xml
-#   layer 3  SLSA provenance CONTENT  -- the pinned .intoto bundle attests a
-#            subject trivalent-<vr>.<arch>.rpm with this exact sha256, and its
-#            signing cert carries the pinned builder / source / branch identity
+#   layer 1  rpm body signature   -- rpmkeys -Kv against the pinned key
+#   layer 2  signed repodata      -- gpg --verify repomd.xml.asc, then bind the
+#            RPM's sha256 to the <checksum> in the signed primary.xml
+#   layer 3  SLSA provenance      -- cosign verifies the full Sigstore/Rekor
+#            chain over the .intoto bundle OFFLINE (pinned trusted root), then
+#            policy on the statement: subject digest == this RPM, builder id +
+#            source uri + branch + arch entrypoint == the anchors
 #
-# NOT re-checked here: the Sigstore/Rekor signature chain over the bundle
-# (slsa-verifier needs network). Trust in it rides on `intotoHash` being pinned
-# -- and verify/10-verify-supply-chain.sh runs the real slsa-verifier before a
-# pin is taken.
+# Rotating verify/sigstore-trusted-root.json: see MAINTENANCE.md.
 {
   runCommand,
   fetchurl,
@@ -24,6 +23,7 @@
   gzip,
   libxml2,
   coreutils,
+  cosign,
   anchors,
   pins,
   arch,
@@ -42,6 +42,7 @@ let
   repomdAsc = f "repomd.xml.asc" pin.repomdAscUrl pin.repomdAscHash;
   primary = f "primary.xml.zst" pin.primaryUrl pin.primaryHash;
   intoto = f "multiple.intoto.jsonl" pin.intotoUrl pin.intotoHash;
+  trustedRoot = ../verify/sigstore-trusted-root.json;
 in
 runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
   {
@@ -53,6 +54,7 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
       gzip
       libxml2
       coreutils
+      cosign
     ];
     inherit (anchors)
       fpr
@@ -63,6 +65,7 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
       ;
     vr = pin.versionRelease;
     rpmSha = pin.rpmSha256;
+    trHash = pins.sigstoreTrustedRootSha256;
     inherit arch;
     passAsFile = [ "hdr" ];
     hdr = "trivalent supply-chain verification (pure, offline)";
@@ -89,7 +92,8 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
     echo "layer 1 OK"
 
     echo "== layer 2: signed repodata + primary tie =="
-    gpg --homedir "$GNUPGHOME" --status-fd=1 --verify ${repomdAsc} ${repomd} > l2 2>l2.err || { cat l2 l2.err; fail "layer2: gpg --verify repomd.xml.asc failed"; }
+    gpg --homedir "$GNUPGHOME" --status-fd=1 --verify ${repomdAsc} ${repomd} > l2 2>l2.err \
+      || { cat l2 l2.err; fail "layer2: gpg --verify repomd.xml.asc failed"; }
     grep -Eq "^\[GNUPG:\] VALIDSIG [0-9A-F]+ .* $fpr\$" l2 \
       || { cat l2; fail "layer2: repomd.xml is not a VALIDSIG whose primary key is $fpr"; }
 
@@ -110,23 +114,43 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
     [ "$cs" = "$rpmSha" ] || fail "layer2: repodata lists trivalent-$vr checksum $cs, not $rpmSha"
     echo "layer 2 OK (signed repodata attests $rpmSha)"
 
-    echo "== layer 3: SLSA provenance content =="
+    echo "== layer 3: SLSA provenance (full Sigstore chain, offline) =="
+    got_tr="$(sha256sum ${trustedRoot} | cut -d' ' -f1)"
+    [ "$got_tr" = "$trHash" ] || fail "layer3: sigstore-trusted-root.json sha256 $got_tr != pinned $trHash (see MAINTENANCE.md)"
+
+    # regex-escape the builder id for --certificate-identity-regexp
+    bid_re="$(printf '%s' "$slsaBuilderId" | sed 's/[.[\*^$()+?{|]/\\&/g')"
+    cosign verify-blob-attestation \
+      --bundle ${intoto} \
+      --trusted-root ${trustedRoot} \
+      --certificate-identity-regexp "^''${bid_re}\$" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      --type slsaprovenance \
+      ${rpmFile} 2>&1 | tee l3
+    grep -q '^Verified OK$' l3 || fail "layer3: cosign did not print 'Verified OK'"
+
+    # policy on the (now cryptographically trusted) statement
     jq -r '.dsseEnvelope.payload' ${intoto} | base64 -d > statement.json
+    exp_uri="git+https://''${slsaSourceUri}@refs/heads/''${slsaSourceBranch}"
     jq -e --arg n "trivalent-$vr.$arch.rpm" --arg h "$rpmSha" \
       '.subject[] | select(.name==$n) | .digest.sha256==$h' statement.json >/dev/null \
-      || fail "layer3: provenance has no subject trivalent-$vr.$arch.rpm digest $rpmSha"
-    jq -r '.verificationMaterial.certificate.rawBytes' ${intoto} | base64 -d > cert.der
-    for s in "$slsaBuilderId" "$slsaSourceUri" "refs/heads/$slsaSourceBranch"; do
-      grep -qaF "$s" cert.der || fail "layer3: signing cert does not carry '$s'"
-    done
-    echo "layer 3 OK (provenance binds this RPM to $slsaBuilderId)"
+      || fail "layer3: no subject trivalent-$vr.$arch.rpm with digest $rpmSha"
+    jq -e --arg b "$slsaBuilderId" '.predicate.builder.id==$b' statement.json >/dev/null \
+      || fail "layer3: predicate.builder.id != $slsaBuilderId"
+    jq -e --arg u "$exp_uri" '.predicate.invocation.configSource.uri==$u' statement.json >/dev/null \
+      || fail "layer3: configSource.uri != $exp_uri"
+    jq -e --arg e ".github/workflows/build_$arch.yml" \
+      '.predicate.invocation.configSource.entryPoint==$e' statement.json >/dev/null \
+      || fail "layer3: configSource.entryPoint != build_$arch.yml"
+    echo "layer 3 OK (Sigstore chain verified offline; statement bound to this RPM + builder)"
 
     mkdir -p "$out"
     cp ${rpmFile} "$out/trivalent.rpm"
     { cat "$hdrPath"; echo; echo "version-release : $vr"; echo "arch            : $arch";
       echo "rpm sha256      : $rpmSha"; echo "signing key     : $fpr";
-      echo "slsa builder    : $slsaBuilderId"; echo;
-      echo "RESULT: PASS (layers 1+2+3, offline; Sigstore chain carried by intotoHash pin)"; } > "$out/supply-chain.log"
+      echo "slsa builder    : $slsaBuilderId";
+      echo "sigstore root   : $trHash"; echo;
+      echo "RESULT: PASS (layers 1+2+3, fully offline)"; } > "$out/supply-chain.log"
     cat log >> "$out/supply-chain.log"
     echo "RESULT: PASS"
   ''

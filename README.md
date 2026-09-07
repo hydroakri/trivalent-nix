@@ -2,9 +2,10 @@
 
 A standalone Nix flake that packages [secureblue Trivalent](https://github.com/secureblue/Trivalent)
 (hardened Chromium) from the upstream signed RPM. The **three-layer supply-chain
-verification runs in the build graph** (`lib/verify.nix`, pure + offline): the
-RPM only reaches `src` after its body signature, the signed repodata, and the
-SLSA provenance all check out, so `nix build` *is* the verification.
+verification runs in the build graph** (`lib/verify.nix`, pure + fully offline):
+the RPM only reaches `src` after its GPG body signature, the GPG-signed repodata,
+and the SLSA provenance (whole Sigstore/Rekor chain, via cosign against a
+vendored trusted root) all check out -- so `nix build` *is* the verification.
 
 Packaging technique (RPM unpack + FHS wrap) is borrowed from
 [`quixaq/trivalent-nix`](https://github.com/quixaq/trivalent-nix); its
@@ -60,7 +61,7 @@ github:hydroakri/trivalent-nix#trivalent`.
 
 | | |
 |---|---|
-| RPM body signature + signed repodata + SLSA-provenance content, key `26B4…3E41`, in the build graph | **done** -- `lib/verify.nix` / `checks.supply-chain`; Sigstore chain carried by the pinned `intotoHash` (re-verified live by `verify/10-…` before a pin) |
+| RPM body signature + signed repodata + SLSA provenance (full Sigstore/Rekor chain, **offline**), key `26B4…3E41` | **done, in the build graph** -- `lib/verify.nix` / `checks.supply-chain`; cosign against the vendored `verify/sigstore-trusted-root.json` (rotation: `MAINTENANCE.md`) |
 | launches, renders a real page, FHS wrapper doesn't downgrade the sandbox | **done** -- `verify/30-sandbox-selfcheck.sh`; `F4-F5-RESULTS.md` |
 | F4 (glibc): binary needs `GLIBC_2.43`, default `glibcStrategy = "fedora-rpm"` | **done** -- `F4-F5-RESULTS.md` |
 | F5 (sandbox): unpriv userns + seccomp-bpf, wrapped == unwrapped, no setuid helper | **done** -- `F4-F5-RESULTS.md` |
