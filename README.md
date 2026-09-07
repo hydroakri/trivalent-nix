@@ -1,12 +1,6 @@
 # trivalent-nix
 
 [![ci](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml/badge.svg)](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml)
-[![update-trivalent](https://github.com/hydroakri/trivalent-nix/actions/workflows/update-trivalent.yml/badge.svg)](https://github.com/hydroakri/trivalent-nix/actions/workflows/update-trivalent.yml)
-[![update-flake-lock](https://github.com/hydroakri/trivalent-nix/actions/workflows/update-flake-lock.yml/badge.svg)](https://github.com/hydroakri/trivalent-nix/actions/workflows/update-flake-lock.yml)
-
-`ci` is the real pass/fail. The `update-*` badges also go red when a bad
-upstream/nixpkgs move was correctly caught and rolled back -- open the run to
-tell that apart from an actual stall.
 
 A standalone Nix flake that packages [secureblue Trivalent](https://github.com/secureblue/Trivalent)
 (hardened Chromium) from the upstream signed RPM. The **three-layer supply-chain
