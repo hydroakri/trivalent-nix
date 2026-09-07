@@ -154,14 +154,27 @@ The package is a Fedora RPM patchelf'd against nixpkgs libs and FHS-wrapped, so
 nixpkgs movement can break it. It is built so every break is **loud, at build
 time, before deploy** -- never a silently broken browser:
 
-| drift | when it's caught |
+`installCheckPhase` (run by `nix build` and `checks.trivalent`, i.e. `nix flake
+check`) does four layers on the patched binary, cheapest first:
+
+1. interpreter exists; every direct `DT_NEEDED` resolves by name in the RPATH;
+2. **full transitive `ld.so --list` closure** -- any `not found` at any depth
+   fails (a runtime lib whose *own* deps drifted);
+3. **real load + relocation** (`trivalent --version` in the sandbox) -- catches
+   `version \`GLIBC_2.43' not found`, `undefined symbol`, ABI breaks that trace
+   mode cannot see;
+4. the vendor `trivalent.sh` still `exec bwrap`s (F5).
+
+| drift | caught by |
 |---|---|
-| a `runtimeLibs` attr renamed/removed (`xorg.libX11` -> `libx11`, ...) | eval error, `nix flake check` red |
-| a runtime lib bumps SONAME / drops a versioned symbol | `installCheckPhase` -- every `DT_NEEDED` must resolve in the RPATH, else the build fails (`checks.trivalent` runs it) |
-| nixpkgs glibc reaches the Fedora one | nothing breaks -- default `glibcStrategy = "fedora-rpm"` is glibc-version-independent (Fedora GA `glibc-2.43-2.fc44`, frozen tree). Switching to `"nixpkgs"` then just drops the extra download. |
-| `buildFHSEnv` internals refactor (`-bwrap` name, `runScript`) | omen15 build fails, and/or the AppArmor attach glob stops matching -- run `CHECK_APPARMOR=1 verify/30-sandbox-selfcheck.sh` |
-| upstream rewrites `trivalent.sh` | `installCheckPhase` (`grep 'exec bwrap'`) fails the build |
-| GPU/GL regression from a mismatched mesa | only visible at runtime -> `verify/30-sandbox-selfcheck.sh` + `chrome://gpu` |
+| a `runtimeLibs` attr renamed/removed (`xorg.libX11` -> `libx11`, ...) | eval error |
+| a runtime lib bumps SONAME | layer 1 -> build fails |
+| a runtime lib's transitive dep drifts / goes missing | layer 2 -> build fails |
+| glibc / a lib becomes ABI-incompatible (`GLIBC_2.x not found`, `undefined symbol`) | layer 3 -> build fails (verified: `glibcStrategy = "nixpkgs"` now fails the build, not just at launch) |
+| nixpkgs glibc reaches the Fedora one | nothing breaks -- default `glibcStrategy = "fedora-rpm"` is glibc-version-independent (Fedora GA `glibc-2.43-2.fc44`, frozen tree) |
+| `buildFHSEnv` `-bwrap` rename | omen15 build fails, and/or the AppArmor attach glob stops matching -- `CHECK_APPARMOR=1 verify/30-sandbox-selfcheck.sh` |
+| upstream rewrites `trivalent.sh` | layer 4 -> build fails |
+| GPU/GL regression from a mismatched mesa | runtime only -> `verify/30-sandbox-selfcheck.sh` + `chrome://gpu` |
 
 **After any nixpkgs bump that rebuilds Trivalent, run:**
 

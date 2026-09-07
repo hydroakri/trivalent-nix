@@ -192,37 +192,68 @@ let
     '';
 
     # Fail the BUILD loudly on nixpkgs drift instead of shipping a broken
-    # browser: every DT_NEEDED must resolve inside the RPATH we set, the
-    # interpreter must exist, and the vendor launcher must still have the
-    # structure F5 relies on. A renamed/soname-bumped runtime lib, a glibc
-    # that outgrows the Fedora one, or an upstream launcher rewrite all trip
-    # this -- and `nix flake check` runs it (see checks.trivalent).
+    # browser. Runs on `nix build` and via `nix flake check` (checks.trivalent).
+    # Layers, cheapest first:
+    #   1. interpreter exists; every direct DT_NEEDED resolves by name in RPATH
+    #      (catches an attr rename that still eval'd, or a soname bump)
+    #   2. `ld.so --list` on the patched binary: FULL TRANSITIVE closure -- any
+    #      "not found" at any depth fails (a runtime lib whose own deps drifted)
+    #   3. actually load+relocate it (`$bin --version`): catches symbol-version
+    #      breaks like `GLIBC_2.43 not found` / `undefined symbol` that trace
+    #      mode cannot see. A clean env-only failure (no display, minimal /proc
+    #      in the sandbox) is tolerated; a linker error is not.
+    #   4. the vendor launcher still has the structure F5 depends on
     doInstallCheck = true;
     installCheckPhase = ''
       runHook preInstallCheck
-      bin="$(find "$out" -path '*/trivalent/trivalent' -type f | head -n1)"
-      [ -n "$bin" ] || { echo "drift: no trivalent binary in \$out"; exit 1; }
+      fail() { echo "DRIFT: $*"; exit 1; }
+      root="$(dirname "$(find "$out" -name trivalent.sh -type f | head -n1)")"
+      [ -n "$root" ] && [ -f "$root/trivalent" ] || fail "no trivalent binary in \$out"
 
-      interp="$(patchelf --print-interpreter "$bin")"
-      echo "interpreter: $interp"
-      [ -e "$interp" ] || { echo "drift: interpreter '$interp' does not exist"; exit 1; }
+      for bin in "$root/trivalent" "$root/chrome_crashpad_handler"; do
+        [ -f "$bin" ] || continue
+        echo "== $(basename "$bin") =="
+        interp="$(patchelf --print-interpreter "$bin")"
+        [ -e "$interp" ] || fail "interpreter '$interp' does not exist"
+        rpath="$(patchelf --print-rpath "$bin")"
+        IFS=: read -ra dirs <<< "$rpath"
 
-      rpath="$(patchelf --print-rpath "$bin")"
-      echo "rpath: $rpath"
-      IFS=: read -ra dirs <<< "$rpath"
-      miss=0
-      while read -r so; do
-        case "$so" in ld-linux*|"") continue ;; esac
-        found=
-        for d in "''${dirs[@]}"; do [ -e "$d/$so" ] && { found=1; break; }; done
-        if [ -z "$found" ]; then echo "drift: DT_NEEDED '$so' not resolvable in rpath"; miss=1; fi
-      done < <(patchelf --print-needed "$bin")
-      [ "$miss" -eq 0 ] || { echo "drift: unresolved shared libraries (nixpkgs rename/soname bump?)"; exit 1; }
+        # (1) direct DT_NEEDED resolve by filename
+        while read -r so; do
+          case "$so" in ld-linux*|"") continue ;; esac
+          found=; for d in "''${dirs[@]}"; do [ -e "$d/$so" ] && { found=1; break; }; done
+          [ -n "$found" ] || fail "DT_NEEDED '$so' not resolvable in rpath (attr rename / soname bump?)"
+        done < <(patchelf --print-needed "$bin")
+
+        # (2) full transitive closure via the (Fedora) ld.so
+        list="$("$interp" --list "$bin" 2>&1 || true)"
+        if printf '%s\n' "$list" | grep -q 'not found'; then
+          printf '%s\n' "$list" | grep 'not found' >&2
+          fail "transitive shared-lib closure has unresolved entries"
+        fi
+        echo "  transitive closure resolves ($(printf '%s\n' "$list" | grep -c '=>') objects)"
+
+        # (3) real load + relocation -- only on the browser binary; the crashpad
+        #     handler is an IPC daemon, not a CLI, and --version misbehaves.
+        if [ "$(basename "$bin")" = trivalent ]; then
+          vout="$(timeout 30 env -i HOME="$TMPDIR" PATH=/noexist \
+                    "$bin" --version 2>&1 || true)"
+          if printf '%s\n' "$vout" | grep -Eq "version \`GLIBC_[0-9.]+' not found|undefined symbol|error while loading shared|cannot open shared object|relocation error"; then
+            printf '%s\n' "$vout" | grep -Ev 'no version information available' >&2
+            fail "dynamic loader/relocation error -- glibc or a runtime lib is ABI-incompatible"
+          fi
+          if printf '%s\n' "$vout" | grep -q "^Trivalent "; then
+            echo "  loaded + relocated + ran: $(printf '%s\n' "$vout" | grep '^Trivalent ')"
+          else
+            echo "  note: no --version banner in the build sandbox, but no linker/reloc error"
+          fi
+        fi
+      done
 
       sh="$(find "$out" -name trivalent.sh -type f | head -n1)"
-      grep -q 'exec bwrap' "$sh" || { echo "drift: vendor trivalent.sh no longer 'exec bwrap' -- re-check F5"; exit 1; }
+      grep -q 'exec bwrap' "$sh" || fail "vendor trivalent.sh no longer 'exec bwrap' -- re-check F5"
       grep -q 'readlink -f "\?''${0}' "$sh" || echo "note: trivalent.sh \$0-resolution idiom changed (non-fatal)"
-      echo "installCheck OK: interpreter + all DT_NEEDED resolve, launcher structure intact"
+      echo "installCheck OK: interpreter + transitive closure + load/reloc + launcher structure"
       runHook postInstallCheck
     '';
 
