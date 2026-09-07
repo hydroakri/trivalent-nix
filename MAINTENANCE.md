@@ -46,12 +46,19 @@ green; the key-rotation job never merges.
 - **Require status checks to pass** -> add **`ci`** (the job in `ci.yml`; it
   appears in the list after the first PR runs it once).
 - **Require a pull request before merging** (the bot always uses a PR anyway).
+- **Do NOT "Require approvals"** -- keep the approving-review count at **0**. The
+  bot has nobody to approve its PR; a non-zero count makes
+  `gh pr merge --squash` in `update-trivalent.yml` fail on every version bump,
+  which defeats unattended operation. The green `ci` check is the gate.
 - Leave `matrix-nixpkgs` **out** of the required set -- it is `continue-on-error`
   and only a drift signal.
 
-This is what makes auto-merge safe: a bad pin -> `checks.supply-chain` /
-`installCheckPhase` red -> `ci` red -> the `Wait for CI, merge or roll back`
-step closes the PR, `main` never moves.
+This is what makes auto-merge safe without a reviewer: a bad pin ->
+`checks.supply-chain` / `installCheckPhase` red -> `ci` red -> the `Wait for CI,
+merge or roll back` step closes the PR, `main` never moves. The one path that
+*does* need a human -- a signing-key / trusted-root change -- never auto-merges
+(label `needs-human-approval`, and `40-review.sh` R1 stays red until a person
+edits the `KEY-PROVENANCE.md` row).
 
 ### 4. Labels
 
