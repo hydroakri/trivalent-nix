@@ -46,6 +46,9 @@
         in
         {
           supply-chain = verified;
+          # opt-in F5 VM check -- `nix build .#sandbox-vm-test` (needs /dev/kvm);
+          # deliberately NOT in `checks` so `nix flake check` stays VM-free.
+          sandbox-vm-test = import ./lib/vm-test.nix { inherit pkgs self; };
           trivalent = pkgs.callPackage ./lib/mk-trivalent.nix {
             inherit arch;
             versionInfo = pin // {
@@ -91,13 +94,25 @@
         }
       );
 
-      apps = forAllSystems (_: {
-        # `nix run .#sandbox-selfcheck -- https://example.org`
-        sandbox-selfcheck = {
-          type = "app";
-          program = "${self}/verify/30-sandbox-selfcheck.sh";
-        };
-      });
+      apps = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
+          # `nix run .#sandbox-selfcheck -- https://example.org`
+          sandbox-selfcheck = {
+            type = "app";
+            program = "${self}/verify/30-sandbox-selfcheck.sh";
+          };
+          # unattended updater: `nix run .#update` from a checkout. Reads
+          # pins.nix / fingerprint.env from the working tree at run time.
+          update = {
+            type = "app";
+            program = "${pkgs.callPackage ./lib/update.nix { }}/bin/trivalent-update";
+          };
+        }
+      );
 
       formatter = forAllSystems (system: treefmtEval.${system}.config.build.wrapper);
 

@@ -298,6 +298,13 @@ buildFHSEnv {
     unwrapped = trivalentUnwrapped;
     inherit (trivalentUnwrapped.passthru) fedoraGlibc;
     inherit versionRelease glibcStrategy;
+    # nixpkgs convention: `nix-shell maintainers/scripts/update.nix` / nix-update
+    # discovers this. Same program as `nix run .#update`. Emits the commit JSON.
+    updateScript = {
+      command = [ "${callPackage ./update.nix { }}/bin/trivalent-update" ];
+      supportedFeatures = [ "commit" ];
+      attrPath = "trivalent";
+    };
   };
 
   meta = {

@@ -1,0 +1,170 @@
+name: update-trivalent
+
+# Unattended: detect a new Trivalent release -> verify it (3 layers, live) ->
+# rewrite pins.nix -> PR -> nix flake check gates -> auto-merge on green ->
+# push to the Attic cache. F1 events (key / Sigstore trusted-root change) HALT
+# to a GitHub issue and never touch pins.nix.
+#
+# Repo prerequisites: secrets GH_TOKEN_FOR_UPDATES + ATTIC_TOKEN; "Allow
+# auto-merge" on; a branch-protection rule on main requiring the `ci` check.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+concurrency:
+  group: update-trivalent
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ secrets.GH_TOKEN_FOR_UPDATES }}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    outputs:
+      pr: ${{ steps.pr.outputs.pr_number }}
+      merged: ${{ steps.merge.outputs.merged }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - run: |
+          gh auth setup-git
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: ryanccn/attic-action@5635a15ef0c5462194ffbd05d1daeddc74625c3a # v0.5.0
+        with:
+          endpoint: https://cache.hydroakri.cc
+          cache: cachix
+          token: ${{ secrets.ATTIC_TOKEN }}
+      - name: LanTian read-only substituter
+        run: |
+          mkdir -p ~/.config/nix
+          {
+            echo "extra-substituters = https://attic.xuyh0120.win/lantian"
+            echo "extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
+          } >> ~/.config/nix/nix.conf
+
+      - name: Run the updater
+        id: update
+        run: |
+          set +e
+          nix run .#update
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Classify the outcome
+        id: outcome
+        run: |
+          rc="${{ steps.update.outputs.rc }}"
+          if [ "$rc" != "0" ]; then
+            case "$rc" in
+              20) reason="F3: repodata advertises a release GitHub never published" ;;
+              22) reason="version map unparseable" ;;
+              30) reason="F2: SLSA provenance format changed" ;;
+              40) reason="F1: signing key changed -- needs human cross-check" ;;
+              41) reason="Sigstore trusted root does not match its pin" ;;
+              1[123]) reason="a supply-chain verification layer failed" ;;
+              *) reason="updater exited $rc" ;;
+            esac
+            title="trivalent auto-update HALTED: $reason"
+            body="$(cat HALT.txt 2>/dev/null || echo "$reason")"
+            num="$(gh issue list --state open --label blocked --search "in:title \"$title\"" --json number --jq '.[0].number')"
+            if [ -n "$num" ]; then
+              gh issue comment "$num" --body "Recurred on $(date -u +%FT%TZ). $body"
+            else
+              gh issue create --title "$title" --label blocked --label security --body "$body"
+            fi
+            exit 1
+          fi
+          # rc 0: bump or no-op
+          changed="$(git status --porcelain)"
+          if [ -z "$changed" ]; then
+            echo "no-op -- nothing to do"; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # working-tree guard: the updater may only touch these
+          if git status --porcelain | grep -vE '^.M? (pins\.nix|verify/logs/)' ; then
+            echo "::error::updater changed files it must not"
+            git checkout -- . && git clean -fd
+            exit 1
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "NEW=$(sed -n 's/.*versionRelease = "\([^"]*\)".*/\1/p' pins.nix | head -1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Pre-PR validation
+        if: steps.outcome.outputs.proceed == 'true'
+        run: |
+          nix flake check --print-build-logs
+          nix build .#trivalent .#supply-chain --print-build-logs
+
+      - name: Open PR
+        id: pr
+        if: steps.outcome.outputs.proceed == 'true'
+        run: |
+          NEW="${{ steps.outcome.outputs.NEW }}"
+          BR="bot/trivalent-$NEW"
+          git push origin --delete "$BR" 2>/dev/null || true
+          git checkout -B "$BR"
+          git add pins.nix verify/logs
+          git commit -m "trivalent: -> $NEW" -m "layers 1+2+3 PASS (live slsa-verifier + offline cosign in the build graph)"
+          git push -u origin "$BR"
+          PR="$(gh pr create --base main --head "$BR" \
+            --title "trivalent: -> $NEW" \
+            --label automated --label dependencies \
+            --body "Auto-update to \`$NEW\`. pins.nix rewritten by \`nix run .#update\`; passed \`nix flake check\` + \`nix build\`. verify/logs/$NEW/ attached.")"
+          echo "pr_number=$(gh pr view "$PR" --json number --jq .number)" >> "$GITHUB_OUTPUT"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for CI, merge or roll back
+        id: merge
+        if: steps.pr.outputs.pr_number != ''
+        run: |
+          PR="${{ steps.pr.outputs.pr_number }}"
+          BR="${{ steps.pr.outputs.branch }}"
+          for _ in $(seq 60); do
+            gh pr checks "$PR" >/dev/null 2>&1 && break || sleep 10
+          done
+          if timeout 21600 gh pr checks "$PR" --watch --interval 60; then
+            ok=false
+            for _ in 1 2 3; do
+              gh pr merge "$PR" --squash --delete-branch && { ok=true; break; } || sleep 30
+            done
+            if [ "$ok" != true ]; then
+              echo "::error::merge kept failing -- PR $PR left open"; exit 1
+            fi
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::CI failed or timed out -- rolling back"
+            gh pr close "$PR" --comment "CI red; closing automatically. main keeps the previous pins.nix."
+            git push origin --delete "$BR" 2>/dev/null || true
+            exit 1
+          fi
+
+  publish:
+    needs: update
+    if: needs.update.outputs.merged == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: ryanccn/attic-action@5635a15ef0c5462194ffbd05d1daeddc74625c3a # v0.5.0
+        with:
+          endpoint: https://cache.hydroakri.cc
+          cache: cachix
+          token: ${{ secrets.ATTIC_TOKEN }}
+      - run: |
+          nix build .#trivalent .#supply-chain --print-out-paths --no-link \
+            | xargs attic push cachix

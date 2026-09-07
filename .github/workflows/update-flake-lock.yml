@@ -1,0 +1,122 @@
+name: update-flake-lock
+
+# Keeps the flake's own flake.lock (nixpkgs, treefmt-nix) fresh so `checks`
+# evaluate against current nixpkgs. The nixpkgs-drift gate is
+# lib/mk-trivalent.nix installCheckPhase (transitive closure + LD_BIND_NOW
+# load) -- a glib/mesa/nss/glibc soname or symbol break fails the build, the PR
+# goes red, and the rollback block keeps the old lock.
+#
+# Consumers who `inputs.nixpkgs.follows` don't depend on this.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+
+concurrency:
+  group: update-flake-lock
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ secrets.GH_TOKEN_FOR_UPDATES }}
+
+jobs:
+  update-flake-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - run: |
+          gh auth setup-git
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: ryanccn/attic-action@5635a15ef0c5462194ffbd05d1daeddc74625c3a # v0.5.0
+        with:
+          endpoint: https://cache.hydroakri.cc
+          cache: cachix
+          token: ${{ secrets.ATTIC_TOKEN }}
+      - name: LanTian read-only substituter
+        run: |
+          mkdir -p ~/.config/nix
+          {
+            echo "extra-substituters = https://attic.xuyh0120.win/lantian"
+            echo "extra-trusted-public-keys = lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
+          } >> ~/.config/nix/nix.conf
+
+      - name: Upstream channel health
+        id: health
+        run: |
+          v="$(curl -sf 'https://prometheus.nixos.org/api/v1/query?query=hydra_job_failed%7Bchannel%3D%22nixos-unstable%22%7D' \
+              | jq -r '.data.result[0].value[1] // ""')"
+          if [ -n "$v" ] && [ "$v" != "0" ]; then
+            echo "nixos-unstable is broken (hydra_job_failed=$v) -- skipping"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Staleness -- does anything that affects .#trivalent move?
+        id: stale
+        if: steps.health.outputs.go == 'true'
+        run: |
+          before="$(nix eval --raw .#packages.x86_64-linux.trivalent.drvPath)"
+          nix flake update
+          after="$(nix eval --raw .#packages.x86_64-linux.trivalent.drvPath)"
+          if [ "$before" = "$after" ]; then
+            echo "trivalent drv unchanged -- reverting the lock bump"
+            git checkout -- flake.lock
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Working-tree guard + validate
+        if: steps.stale.outputs.go == 'true'
+        run: |
+          if git status --porcelain | grep -vE '^ M flake\.lock$'; then
+            echo "::error::unexpected working-tree changes after nix flake update"
+            git checkout -- . ; exit 1
+          fi
+          nix flake check --print-build-logs
+          nix build .#trivalent --print-build-logs
+
+      - name: Open PR
+        id: pr
+        if: steps.stale.outputs.go == 'true'
+        run: |
+          BR="bot/flake-lock-$(date +%Y%m%d)"
+          git push origin --delete "$BR" 2>/dev/null || true
+          git checkout -B "$BR"
+          git add flake.lock
+          git commit -m "flake.lock: update"
+          git push -u origin "$BR"
+          PR="$(gh pr create --base main --head "$BR" --title "flake.lock: update" \
+            --label automated --label dependencies \
+            --body "Passed \`nix flake check\` + \`nix build .#trivalent\` (drift installCheckPhase).")"
+          echo "pr_number=$(gh pr view "$PR" --json number --jq .number)" >> "$GITHUB_OUTPUT"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for CI, merge or roll back
+        if: steps.pr.outputs.pr_number != ''
+        run: |
+          PR="${{ steps.pr.outputs.pr_number }}"
+          BR="${{ steps.pr.outputs.branch }}"
+          for _ in $(seq 60); do gh pr checks "$PR" >/dev/null 2>&1 && break || sleep 10; done
+          if timeout 21600 gh pr checks "$PR" --watch --interval 60; then
+            ok=false
+            for _ in 1 2 3; do
+              gh pr merge "$PR" --squash --delete-branch && { ok=true; break; } || sleep 30
+            done
+            [ "$ok" = true ] || { echo "::error::merge kept failing -- PR $PR left open"; exit 1; }
+          else
+            echo "::error::CI failed or timed out -- rolling back"
+            gh pr close "$PR" --comment "CI red; closing. main keeps the previous flake.lock."
+            git push origin --delete "$BR" 2>/dev/null || true
+            exit 1
+          fi

@@ -7,11 +7,11 @@
 # signature chain itself is not re-verified in the pure build (slsa-verifier
 # needs network); trust in it is carried by `intotoHash` being pinned.
 #
-# Update flow (manual -- no CI yet):
-#   1. ./verify/20-version-map.sh <arch>                 -> VERSION=<v-r>
-#   2. ./verify/10-verify-supply-chain.sh <v-r> <arch>   -> RESULT: PASS + pins block
-#   3. paste the block below; keep verify/logs/<v-r>/ committed
-#   4. ./verify/40-review.sh                             -> REVIEW: PASS
+# This file is rewritten by `nix run .#update` (see lib/update.nix) --
+# .github/workflows/update-trivalent.yml runs it daily, gates the result on
+# `nix flake check`, and auto-merges on green. F1 events (key / trusted-root
+# change) HALT to a GitHub issue instead of touching this file.
+# To bump by hand: `nix run .#update` in a checkout, then `./verify/40-review.sh`.
 {
   # constant across versions: the signing key, fetched and checked against
   # SECUREBLUE_GPG_SHA256 / the fingerprint in lib/anchors.nix.

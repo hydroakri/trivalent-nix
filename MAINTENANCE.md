@@ -70,20 +70,22 @@ the hash check exists precisely to stop that.
 
 ## Per-release update
 
+Unattended via `.github/workflows/update-trivalent.yml` (daily -> `nix run
+.#update` -> `nix flake check` -> auto-merge on green). By hand:
+
 ```sh
-./verify/20-version-map.sh x86_64                 # -> VERSION=<v-r>   (exit 0)
-./verify/10-verify-supply-chain.sh <v-r> x86_64   # -> RESULT: PASS + a pins.nix block
-#   paste the printed block into pins.nix (x86_64 = { ... };)
-#   keep verify/logs/<v-r>/ committed
-./verify/40-review.sh                             # -> REVIEW: PASS
-nix flake check                                   # lib/verify.nix re-verifies offline
-./verify/30-sandbox-selfcheck.sh https://example.org
-git commit
+nix run .#update            # preflight -> discover -> verify (live) -> rewrite
+                            # pins.nix + verify/logs/<v-r>/ -> nix build
+                            # .#supply-chain -> print the updateScript JSON
+./verify/40-review.sh       # -> REVIEW: PASS
+nix flake check
+git add pins.nix verify/logs && git commit
 ```
 
-`20` exit 0 **before** `10`; `10` exit 0 **before** `pins.nix` is touched.
-`10-verify` also re-runs `slsa-verifier` with its live Sigstore/Rekor lookup --
-belt-and-suspenders over what `lib/verify.nix` does offline.
+`nix run .#update` HALTs (writes `HALT.txt`, exits 20/22/30/40/41, touches
+nothing) on F1/F2/F3 -- key change, trusted-root mismatch, provenance format
+change, repodata ahead of GitHub. The CI turns a HALT into a `blocked` GitHub
+issue; resolve it with the procedures in this file.
 
 ---
 

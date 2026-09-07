@@ -97,6 +97,30 @@ for n in 1 2 3; do
   [ "$c" -eq 1 ] && good "L$n is set to 0 exactly once" || bad "L$n set to 0 $c times (expected 1)"
 done
 
+# ---- R4: Sigstore trusted-root pin integrity ---------------------------
+echo "== R4: Sigstore trusted-root pin =="
+trf="$V/sigstore-trusted-root.json"
+pinned="$(sed -n 's/.*sigstoreTrustedRootSha256 = "\([0-9a-f]*\)".*/\1/p' pins.nix)"
+if [ -f "$trf" ] && [ "$(sha256sum "$trf" | cut -d' ' -f1)" = "$pinned" ]; then
+  good "sigstore-trusted-root.json on disk matches pins.nix sigstoreTrustedRootSha256"
+else
+  bad "sigstore-trusted-root.json sha256 != pins.nix sigstoreTrustedRootSha256"
+fi
+if [ -d .git ]; then
+  # every trusted-root value that ever appeared must have a KEY-PROVENANCE.md row
+  mapfile -t trs < <(git log -p --all -- "$trf" pins.nix 2>/dev/null |
+    grep -E '^\+.*sigstoreTrustedRootSha256 = "' | sed 's/.*"\([0-9a-f]*\)".*/\1/' | sort -u)
+  if [ "${#trs[@]}" -le 1 ]; then
+    good "sigstoreTrustedRootSha256 has had a single value in history"
+  else
+    for t in "${trs[@]}"; do
+      grep -qF "$t" KEY-PROVENANCE.md 2>/dev/null &&
+        good "  trusted-root $t has a KEY-PROVENANCE.md row" ||
+        bad "  trusted-root $t rotated without a KEY-PROVENANCE.md row (see MAINTENANCE.md)"
+    done
+  fi
+fi
+
 echo
 [ "$fail" -eq 0 ] && echo "REVIEW: PASS" || echo "REVIEW: FAIL"
 exit "$fail"

@@ -55,7 +55,9 @@ github:hydroakri/trivalent-nix#trivalent`.
 - **No `trivalent-selinux`** -- NixOS has no usable SELinux (store layout is
   incompatible with Fedora's targeted base policy). `programs.trivalent.apparmor`
   is the stand-in; see "Kept vs degraded".
-- **No automatic updates** -- `pins.nix` is bumped by hand (see the update cycle).
+- **Updates are unattended** -- `.github/workflows/update-trivalent.yml` runs
+  `nix run .#update` daily, gates on `nix flake check`, auto-merges on green,
+  pushes to the Attic cache. F1 events halt to a GitHub issue (see "Automation").
 
 ## Status
 
@@ -66,7 +68,7 @@ github:hydroakri/trivalent-nix#trivalent`.
 | F4 (glibc): binary needs `GLIBC_2.43`, default `glibcStrategy = "fedora-rpm"` | **done** -- `F4-F5-RESULTS.md` |
 | F5 (sandbox): unpriv userns + seccomp-bpf, wrapped == unwrapped, no setuid helper | **done** -- `F4-F5-RESULTS.md` |
 | AppArmor confinement | **opt-in, complain by default** -- `programs.trivalent.apparmor` |
-| CI (version-map + auto-update + alarms) | **not built** -- `verify/*.sh` exit codes are the contract |
+| unattended auto-update + drift CI | **done** -- `.github/workflows/`, `nix run .#update`; see "Automation" |
 | `aarch64` | **not exposed** -- see below |
 
 ## verify/ -- the scripts (exit codes are the judgement)
@@ -77,28 +79,59 @@ github:hydroakri/trivalent-nix#trivalent`.
 | `20-version-map.sh <arch>` | derive "current version" from repodata **and** GitHub independently, classify any disagreement | `0` match (prints `VERSION=`) · `10` repodata lag (retries) · `21` lag past budget · `20` repodata ahead / tag absent = ALARM (F3) · `22` unparseable |
 | `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the same 3 layers as `lib/verify.nix` **plus** the live `slsa-verifier` Sigstore/Rekor chain; prints a ready-to-paste `pins.nix` block. Run this before taking a pin. | `0` = **RESULT: PASS** · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
 | `30-sandbox-selfcheck.sh [url]` | strace the wrapped **and** unwrapped browser on a real URL; assert userns + seccomp-bpf, no setuid path, sandbox syscall sets match, DOM non-empty | `0` ok · `50` sandbox inadequate · `53` wrapped≠unwrapped · `52` empty DOM |
-| `40-review.sh` | **independent review layer** -- definition-drift, version-map coverage, pass-criterion validity. Run after any edit to `00/10/20` or `fingerprint.env` | `0` = REVIEW: PASS |
+| `40-review.sh` | **independent review layer** -- R1 fingerprint drift, R2 version-map coverage, R3 pass-criterion, R4 Sigstore trusted-root pin + provenance. Runs in `ci.yml`. | `0` = REVIEW: PASS |
 | `99-negative-tests.sh` | proves the fail-closed paths (tamper, key flip, F2 30-vs-31, F3 reverse) actually return those codes | `0` = all fail-closed |
 
-These four stay shell because they need network / wall-clock time / a real
-kernel -- not expressible as a pure build. They self-bootstrap their CLIs via
-`nix shell`, or use `nix develop`. The 3-layer *verification* itself is
-`lib/verify.nix` (pure, in the build graph); `10-…` is the wrapper that also
-runs the live `slsa-verifier` and emits the pin block.
+These stay shell because they need network / wall-clock time / a real kernel --
+not expressible as a pure build. `nix run .#update` drives `20` + `10` behind a
+Nix-built, dependency-pinned PATH; `00` is the human key-rotation gate; `30` /
+`99` are run by hand. The 3-layer *verification* itself is `lib/verify.nix`
+(pure, in the build graph); `10-…` adds the live `slsa-verifier` lookup.
 
-### One update cycle (manual -- no CI yet)
+## Automation
+
+`nix run .#update` (`lib/update.nix`, a Nix-built `writeShellApplication`, also
+`packages.trivalent.passthru.updateScript`) is the whole update:
+
+1. **preflight** -- fetch `secureblue.gpg`, assert sha256 + fingerprint ==
+   `pins.nix` / `fingerprint.env`; assert `verify/sigstore-trusted-root.json`
+   matches its pin. Mismatch -> `HALT.txt` + exit 40/41, **no writes**.
+2. **discover** -- `verify/20-version-map.sh` (repodata vs GitHub, independently).
+3. **verify** -- `verify/10-verify-supply-chain.sh` (3 layers + the live
+   `slsa-verifier` Sigstore/Rekor lookup); writes `verify/logs/<v-r>/`.
+4. **rewrite `pins.nix`** -- regenerates the `x86_64` block (13 fields).
+5. **re-verify** -- `nix build .#supply-chain` (the pure offline gate).
+6. **emit** the `updateScript` JSON (`attrPath` / `oldVersion` / `newVersion` /
+   `files` / `commitMessage`).
+
+Exit codes: `0` bump-or-no-op · `20` F3 · `22` unparseable · `30` F2 · `40` key
+changed (F1) · `41` trusted-root mismatch · `11/12/13` a layer failed.
+
+`.github/workflows/`:
+
+| workflow | trigger | does |
+|---|---|---|
+| `ci.yml` | PR + push to main | `nix flake check` + `nix build .#trivalent .#supply-chain` + `verify/40-review.sh`; Attic push on main. **The required status check.** |
+| `update-trivalent.yml` | daily `0 6 * * *` | `nix run .#update`; on HALT -> open/update a `blocked`+`security` issue; else working-tree guard (only `pins.nix` + `verify/logs/` may change) -> pre-PR `nix flake check` -> PR `bot/trivalent-<v>` -> **auto-merge on green** (wait / 3x-retry / rollback-and-close on red) -> Attic push. |
+| `update-flake-lock.yml` | daily `0 2 * * *` | channel health-gate -> staleness (only if `.#trivalent.drvPath` moves) -> `nix flake update` -> guard `^ M flake.lock$` -> `nix flake check` + build (the drift `installCheckPhase` is the gate) -> PR -> auto-merge/rollback. |
+
+**Fully unattended.** A wrong auto-pin -> `checks.supply-chain` /
+`installCheckPhase` red -> the PR is closed, `main` never advances. The two F1
+decisions (adopting a rotated signing key, rotating the Sigstore trusted root)
+halt to a GitHub issue and are done by a human per `MAINTENANCE.md` -- the
+updater detects and stops, never adopts.
+
+Repo prerequisites: secrets `GH_TOKEN_FOR_UPDATES` + `ATTIC_TOKEN`; "Allow
+auto-merge" enabled; a branch-protection rule on `main` requiring `ci`.
+
+### Bump by hand
 
 ```
-./verify/20-version-map.sh x86_64                 # -> VERSION=<v-r>   (exit 0)
-./verify/10-verify-supply-chain.sh <v-r> x86_64   # -> RESULT: PASS + a pins.nix block
-# paste the block into pins.nix; keep verify/logs/<v-r>/ committed
-./verify/40-review.sh                             # -> REVIEW: PASS
-nix flake check                                   # lib/verify.nix re-checks offline
-./verify/30-sandbox-selfcheck.sh https://example.org
-git commit
+nix run .#update                     # rewrites pins.nix + verify/logs/, prints the JSON
+./verify/40-review.sh                # -> REVIEW: PASS
+nix flake check
+git add pins.nix verify/logs && git commit
 ```
-
-Order is not optional: `20` exit 0 before `10`; `10` exit 0 before `pins.nix`.
 
 ## Trust anchors (`verify/fingerprint.env`)
 
