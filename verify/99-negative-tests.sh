@@ -101,7 +101,11 @@ cat >"$fx/repodata/repomd.xml" <<XML
 </repomd>
 XML
 # serve the fixture over http (nixpkgs curl disables file://)
-(cd "$fx" && exec python3 -m http.server 8973 --bind 127.0.0.1) >/dev/null 2>&1 &
+command -v busybox >/dev/null || {
+  echo "SKIP: need busybox for the fixture HTTP server (nix shell nixpkgs#busybox)"
+  exit 0
+}
+busybox httpd -f -p 127.0.0.1:8973 -h "$fx" >/dev/null 2>&1 &
 srv=$!
 trap 'kill $srv 2>/dev/null; rm -rf "$tmp"; git checkout -q -- verify/fingerprint.env 2>/dev/null || true' EXIT
 for _ in $(seq 20); do

@@ -24,6 +24,7 @@ _nixattr() {
   gpg | gpgv) echo "gnupg" ;;
   rpm2cpio | rpmkeys) echo "rpm" ;;
   sha256sum | b2sum | mktemp) echo "coreutils" ;;
+  xmllint) echo "libxml2" ;;
   *) echo "$1" ;;
   esac
 }
@@ -72,6 +73,55 @@ decompress_to() {
   425a68*) bzip2 -dc "$src" >"$dst" ;;
   *) cp "$src" "$dst" ;;
   esac
+}
+
+# --- repodata (repomd.xml / primary.xml) readers -------------------------
+# xmllint + `sort -V`, no python. These operate on already-fetched,
+# already-signature-checked, already-decompressed files -- transport,
+# decompression and signature verification stay in the caller. The
+# `local-name()` predicates sidestep the repo/common XML namespaces.
+#
+# NB: newest-package selection is `sort -V`, not rpm's EVR algorithm. That is
+# exact for Trivalent's purely-numeric `N.N.N.N-N` scheme (epoch 0, no
+# ~/^/alpha segments). If upstream ever ships an epoch or an alpha tag,
+# `sort -V` could disagree with rpm -- but both callers then cross-check the
+# chosen v-r against an independent source (10-verify against the requested
+# VR; 20-version-map against GitHub) and fail closed on a mismatch, so a bad
+# pick degrades to an alarm, never a silent wrong pin.
+
+# repomd_primary_location <repomd.xml>  ->  "<href>\t<ck-type>\t<ck-hex>"
+repomd_primary_location() {
+  local f="$1" href ct cs base='//*[local-name()="data"][@type="primary"]'
+  href="$(xmllint --xpath "string($base/*[local-name()=\"location\"]/@href)" "$f" 2>/dev/null)" || return 1
+  ct="$(xmllint --xpath "string($base/*[local-name()=\"checksum\"]/@type)" "$f" 2>/dev/null)" || return 1
+  cs="$(xmllint --xpath "string($base/*[local-name()=\"checksum\"])" "$f" 2>/dev/null)" || return 1
+  [ -n "$href" ] && [ -n "$ct" ] && [ -n "$cs" ] || return 1
+  printf '%s\t%s\t%s\n' "$href" "$ct" "$cs"
+}
+
+# repomd_newest_pkg <primary.xml> <name> <arch>
+#   -> "<ver>-<rel>\t<href>\t<ck-type>\t<ck-hex>"  for the highest v-r
+#   return 3 if no such package; return 1 on a malformed / misaligned document
+repomd_newest_pkg() {
+  local f="$1" name="$2" arch="$3"
+  local pred='//*[local-name()="package"][*[local-name()="name"]="'"$name"'"][*[local-name()="arch"]="'"$arch"'"]'
+  local vers rels hrefs cts css nv nr nh nc ns
+  vers="$(xmllint --xpath "$pred/*[local-name()=\"version\"]/@ver" "$f" 2>/dev/null | grep -oE 'ver="[^"]*"' | sed -E 's/ver="([^"]*)"/\1/')"
+  rels="$(xmllint --xpath "$pred/*[local-name()=\"version\"]/@rel" "$f" 2>/dev/null | grep -oE 'rel="[^"]*"' | sed -E 's/rel="([^"]*)"/\1/')"
+  hrefs="$(xmllint --xpath "$pred/*[local-name()=\"location\"]/@href" "$f" 2>/dev/null | grep -oE 'href="[^"]*"' | sed -E 's/href="([^"]*)"/\1/')"
+  cts="$(xmllint --xpath "$pred/*[local-name()=\"checksum\"]/@type" "$f" 2>/dev/null | grep -oE 'type="[^"]*"' | sed -E 's/type="([^"]*)"/\1/')"
+  css="$(xmllint --xpath "$pred/*[local-name()=\"checksum\"]/text()" "$f" 2>/dev/null | grep -oE '[0-9a-fA-F]{8,}')"
+  [ -n "$vers" ] || return 3
+  nv=$(printf '%s\n' "$vers" | grep -c .)
+  nr=$(printf '%s\n' "$rels" | grep -c .)
+  nh=$(printf '%s\n' "$hrefs" | grep -c .)
+  nc=$(printf '%s\n' "$cts" | grep -c .)
+  ns=$(printf '%s\n' "$css" | grep -c .)
+  { [ "$nv" = "$nr" ] && [ "$nv" = "$nh" ] && [ "$nv" = "$nc" ] && [ "$nv" = "$ns" ]; } || return 1
+  paste <(printf '%s\n' "$vers") <(printf '%s\n' "$rels") <(printf '%s\n' "$hrefs") \
+    <(printf '%s\n' "$cts") <(printf '%s\n' "$css") |
+    awk -F'\t' 'NF>=5 {printf "%s-%s\t%s\t%s\t%s\n",$1,$2,$3,$4,$5}' |
+    sort -V | tail -n1 | grep .
 }
 
 # Fetch with retries; https-only, except an explicit loopback URL (fixture tests).

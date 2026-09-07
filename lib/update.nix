@@ -31,7 +31,7 @@
   gnupg,
   gh,
   jq,
-  python3,
+  libxml2,
   rpm,
   gzip,
   zstd,
@@ -58,7 +58,7 @@ writeShellApplication {
     gnupg
     gh
     jq
-    python3
+    libxml2
     rpm
     gzip
     zstd

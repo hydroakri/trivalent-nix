@@ -243,7 +243,10 @@ in
     enable = lib.mkEnableOption "Trivalent (verified-supply-chain hardened Chromium)";
 
     package = lib.mkOption {
-      type = lib.types.package;
+      # nullOr: `self.packages.<system>.trivalent` is absent on systems the flake
+      # doesn't build for (currently non-x86_64) -- keep eval working there and
+      # let `config` below no-op, rather than a "expected package, got null".
+      type = lib.types.nullOr lib.types.package;
       default = defaultPkg;
       defaultText = lib.literalExpression "trivalent-nix.packages.\${system}.trivalent";
       description = "The Trivalent package to install and confine.";

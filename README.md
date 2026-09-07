@@ -183,6 +183,24 @@ Trivalent as upstream intends it, install a secureblue image.
 
 Not affiliated with secureblue, Trivalent, or quixaq.
 
+## Compared to building from source (nixpkgs#531708)
+
+There is an open nixpkgs PR that builds Trivalent **from source** on top of
+nixpkgs' Chromium infrastructure. Different trade-off:
+
+| | from source (nixpkgs#531708) | this flake (repack the signed RPM) |
+|---|---|---|
+| GN hardening flags (`is_cfi`, `enable_reporting=false`, `google_api_key=""`, ...) | hand-mirrored out of `trivalent.spec` into `gnFlags` -- author notes the spec "isn't easily parsable"; drifts on every upstream change | inherited -- we ship secureblue's compiled output, nothing to mirror |
+| launcher hardening (`LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE` scrub, Intel CET `GLIBC_TUNABLES`, `crbug.com/376567` stdio, refuse-root) | re-implemented in a Nix `makeWrapper` wrapper | inherited -- `trivalent.sh` runs **unmodified** |
+| coupling to Chromium version | `broken = chromium.upstream-info.version != "<pinned>"` -- breaks at every nixpkgs Chromium bump until a human re-syncs the patch set | none -- the binary is self-contained |
+| build cost | 48 h timeout, `big-parallel`, needs a cache | minutes, no cache |
+| trust | `fetchFromGitHub` hash | GPG rpm sig + signed repodata + SLSA/Sigstore, in the build graph |
+| cost of the choice | native Nix libs throughout | binary artifact (`sourceProvenance = binaryNativeCode`) + a pinned Fedora glibc (F4) |
+
+Neither is "better"; this one optimises for *running exactly what secureblue
+signed*, cheaply, with the supply chain checked. The bwrap layer that PR drops,
+we keep (see below) only because it is free here.
+
 ## Drift contract (nixpkgs bumps)
 
 The package is a Fedora RPM patchelf'd against nixpkgs libs and FHS-wrapped, so
@@ -231,8 +249,13 @@ nixpkgs in the closure and risks GL-driver ABI skew against the host).
 
 - Trivalent's Chromium patchset + hardened compile flags -- binary shipped
   byte-for-byte, only ELF interpreter/RPATH patched.
-- Intel CET tunables (`x86_ibt`, `x86_shstk`) -- `trivalent.sh` run unmodified.
-- Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised.
+- Intel CET tunables (`x86_ibt`, `x86_shstk`), `LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE`
+  scrub, `crbug.com/376567` stdio hardening -- all from `trivalent.sh` run
+  unmodified, nothing re-implemented.
+- Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised. Minor
+  layer -- secureblue call it "mostly hardened_malloc removal, not significant
+  security", and nixpkgs#531708 drops it; kept here because running the launcher
+  unmodified is free.
 - Renderer sandbox: namespace (user/PID/net) + seccomp-bpf + TSYNC + broker Yama
   (`chrome://sandbox`: "adequately sandboxed"; strace parity in `F4-F5-RESULTS.md`).
 - HW-accelerated canvas/compositing/raster/WebGL + HW video decode/encode

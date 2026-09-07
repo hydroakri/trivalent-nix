@@ -30,7 +30,7 @@
 # hand-off is the VERSION= line; the caller must then run 10-verify-supply-chain.sh
 # and gate everything downstream on ITS exit status.
 
-NEED_TOOLS="curl gh jq python3 gzip zstd"
+NEED_TOOLS="curl gh jq xmllint gzip zstd"
 # shellcheck source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
 
@@ -51,7 +51,7 @@ path_a() { # -> echoes v-r  ; exit 22 on parse failure
   fetch "$SECUREBLUE_REPO_BASEURL/repodata/repomd.xml" -o "$work/repomd.xml" ||
     die "Path A: cannot fetch repomd.xml" 22
   local pl href
-  pl="$(python3 "$VERIFY_DIR/lib/repomd.py" primary-location "$work/repomd.xml")" ||
+  pl="$(repomd_primary_location "$work/repomd.xml")" ||
     die "Path A: cannot read primary location" 22
   href="$(printf '%s' "$pl" | cut -f1)"
   fetch "$SECUREBLUE_REPO_BASEURL/$href" -o "$work/primary.bin" ||
@@ -59,7 +59,7 @@ path_a() { # -> echoes v-r  ; exit 22 on parse failure
   decompress_to "$work/primary.bin" "$work/primary.xml" ||
     die "Path A: cannot decompress primary" 22
   local row
-  if ! row="$(python3 "$VERIFY_DIR/lib/repomd.py" find-package "$work/primary.xml" trivalent "$arch")"; then
+  if ! row="$(repomd_newest_pkg "$work/primary.xml" trivalent "$arch")"; then
     die "Path A: no trivalent/$arch package in repodata" 22
   fi
   printf '%s' "$row" | cut -f1
