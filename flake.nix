@@ -55,15 +55,10 @@
         }
       );
 
-      nixosModules.default =
-        { pkgs, lib, ... }:
-        {
-          config = lib.mkIf (self.packages ? ${pkgs.stdenv.hostPlatform.system}) {
-            environment.systemPackages = [
-              self.packages.${pkgs.stdenv.hostPlatform.system}.trivalent
-            ];
-          };
-        };
+      # options.programs.trivalent.{enable, package, apparmor.*}
+      # apparmor.enable adds a store-path-generated profile that stands in for
+      # the trivalent-selinux policy NixOS cannot run (complain by default).
+      nixosModules.default = import ./modules/nixos.nix { inherit self; };
 
       devShells = forAllSystems (
         system:
