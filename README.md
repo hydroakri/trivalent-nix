@@ -83,7 +83,7 @@ No binary cache is published -- `.#trivalent` is a repack of a prebuilt RPM
 | `00-bootstrap-key.sh` | acquire the signing key from **two independent channels**, check both against `fingerprint.env`, cross-check `build.yml`; append a `KEY-PROVENANCE.md` row | `0` ok · `40` mismatch, writes nothing (F1) · `41` network |
 | `20-version-map.sh <arch>` | derive "current version" from repodata **and** GitHub independently, classify any disagreement | `0` match (prints `VERSION=`) · `10` repodata lag (retries) · `21` lag past budget · `20` repodata ahead / tag absent = ALARM (F3) · `22` unparseable |
 | `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the same 3 layers as `lib/verify.nix` **plus** the live `slsa-verifier` Sigstore/Rekor chain; prints a ready-to-paste `pins.nix` block. Run this before taking a pin. | `0` = **RESULT: PASS** · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
-| `30-sandbox-selfcheck.sh [url]` | strace the wrapped **and** unwrapped browser on a real URL; assert userns + seccomp-bpf, no setuid path, sandbox syscall sets match, DOM non-empty | `0` ok · `50` sandbox inadequate · `53` wrapped≠unwrapped · `52` empty DOM |
+| `30-sandbox-selfcheck.sh [url]` | strace the wrapped **and** unwrapped browser on a real URL; assert userns + seccomp-bpf, no setuid path, sandbox syscall sets match, DOM non-empty; a system `LD_PRELOAD` sentinel never reaches the browser | `0` ok · `50` sandbox inadequate · `53` wrapped≠unwrapped · `52` empty DOM · `55` preload reached the browser |
 | `40-review.sh` | **independent review layer** -- R1 fingerprint drift, R2 version-map coverage, R3 pass-criterion, R4 Sigstore trusted-root pin + provenance. Runs in `ci.yml`. | `0` = REVIEW: PASS |
 | `99-negative-tests.sh` | proves the fail-closed paths (tamper, key flip, F2 30-vs-31, F3 reverse) actually return those codes | `0` = all fail-closed |
 
@@ -227,6 +227,8 @@ check`) does four layers on the patched binary, cheapest first:
 | nixpkgs glibc reaches the Fedora one | nothing breaks -- default `glibcStrategy = "fedora-rpm"` is glibc-version-independent (Fedora GA `glibc-2.43-2.fc44`, frozen tree) |
 | `buildFHSEnv` `-bwrap` rename | omen15 build fails, and/or the AppArmor attach glob stops matching -- `CHECK_APPARMOR=1 verify/30-sandbox-selfcheck.sh` |
 | upstream rewrites `trivalent.sh` | layer 4 -> build fails |
+| upstream drops/moves the `trivalent.sh` `LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE` scrub | `checks.launcher-scrub` -> `nix flake check` red; `verify/30` exit 55. (The `fhsLaunch` `env -u` wrapper still holds the guarantee -- the check just makes the regression visible.) |
+| `buildFHSEnv` stops honouring `extraBwrapArgs` | `checks.launcher-scrub` -> `WIRING FAIL: outer bwrap no longer masks /etc/ld.so.preload` |
 | GPU/GL regression from a mismatched mesa | runtime only -> `verify/30-sandbox-selfcheck.sh` + `chrome://gpu` |
 
 **After any nixpkgs bump that rebuilds Trivalent, run:**
@@ -249,9 +251,15 @@ nixpkgs in the closure and risks GL-driver ABI skew against the host).
 
 - Trivalent's Chromium patchset + hardened compile flags -- binary shipped
   byte-for-byte, only ELF interpreter/RPATH patched.
-- Intel CET tunables (`x86_ibt`, `x86_shstk`), `LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE`
-  scrub, `crbug.com/376567` stdio hardening -- all from `trivalent.sh` run
-  unmodified, nothing re-implemented.
+- Intel CET tunables (`x86_ibt`, `x86_shstk`), `crbug.com/376567` stdio
+  hardening -- from `trivalent.sh` run unmodified, nothing re-implemented.
+- `LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE`/`LD_LIBRARY_PATH` kept out of Chromium
+  (so a system-wide `graphene-hardened-light` / hardened_malloc doesn't reach
+  it -- upstream's intent; PartitionAlloc conflicts). **Owned**, not merely
+  inherited: the buildFHSEnv `runScript` is an `env -u` wrapper and
+  `extraBwrapArgs` masks `/etc/ld.so.preload`, independent of whether
+  `trivalent.sh` keeps doing it. `checks.launcher-scrub` (behavioural, in
+  `nix flake check`) + `verify/30` exit 55 detect a regression in either.
 - Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised. Minor
   layer -- secureblue call it "mostly hardened_malloc removal, not significant
   security", and nixpkgs#531708 drops it; kept here because running the launcher
