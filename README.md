@@ -17,77 +17,54 @@ Output: `packages.x86_64-linux.trivalent` (+ `.default`), `nixosModules.default`
 
 ## Adding it to a NixOS system
 
-`nixosModules.default` just adds the package to `environment.systemPackages`
-(which installs the binary, the `.desktop` entry and icons). Wire it as a flake
-input:
+Wire `trivalent-nix.nixosModules.default` into your host and set the options:
 
 ```nix
 # flake.nix
-{
-  inputs.trivalent-nix.url = "github:hydroakri/trivalent-nix";
-  inputs.trivalent-nix.inputs.nixpkgs.follows = "nixpkgs";   # match your glibc
+inputs.trivalent-nix.url = "github:hydroakri/trivalent-nix";
+inputs.trivalent-nix.inputs.nixpkgs.follows = "nixpkgs";   # match your glibc / mesa
 
-  outputs = { nixpkgs, trivalent-nix, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        ./configuration.nix
-        trivalent-nix.nixosModules.default
-      ];
-    };
-  };
-}
+# a module
+imports = [ trivalent-nix.nixosModules.default ];
+programs.trivalent = {
+  enable = true;
+  apparmor.enable = true;    # opt-in confinement, see below (complain by default)
+  apparmor.enforce = false;
+};
 ```
 
-Or without the module, just the package:
+`enable` installs the package (binary + `.desktop` + icons). Options:
+`package`, `apparmor.{enable,enforce,denyHomePaths,readableHomePaths}`.
 
-```nix
-environment.systemPackages = [ trivalent-nix.packages.x86_64-linux.trivalent ];
-```
+Just the package, no module: `environment.systemPackages = [
+trivalent-nix.packages.x86_64-linux.trivalent ];` or `nix profile install
+github:hydroakri/trivalent-nix#trivalent`.
 
-Home-Manager / imperative: `nix profile install github:hydroakri/trivalent-nix#trivalent`.
+### Requirements / caveats
 
-### Will it actually run?
-
-Tested working on `omen15` (x86_64, CachyOS kernel): the browser launches,
-renders real pages, and the renderer sandbox verifies (`verify/30-sandbox-selfcheck.sh`).
-Requirements and known gaps:
-
-- **Unprivileged user namespaces must be enabled** (`kernel.unprivileged_userns_clone = 1`,
-  `user.max_user_namespaces` > 0). `buildFHSEnv` needs them to build its sandbox
-  and Chromium needs them for the renderer sandbox. If your hardening profile
-  disables userns, this package will not run sandboxed (and won't run at all
-  under the FHS wrapper).
+- **Unprivileged user namespaces** must be available (kernel default; some
+  hardening profiles turn them off). `buildFHSEnv` and Chromium's renderer
+  sandbox both need them.
 - **Wayland/Vulkan flags are not applied.** The vendor `trivalent.conf` that
   picks `--ozone-platform=wayland` / `--use-vulkan` lives at `/etc/trivalent/`,
-  which the FHS sandbox takes from the host, so it is absent on non-secureblue
-  systems. Wayland still works if the session provides it (`NIXOS_OZONE_WL=1`,
-  or pass `--ozone-platform=wayland` / `USE_WAYLAND=true`); Vulkan stays off
-  and the browser runs on GL/ANGLE-GLES.
-- **No `trivalent-selinux`.** secureblue ships a companion SELinux policy module.
-  This is a **NixOS platform limitation, not a packaging gap**: NixOS has no
-  usable SELinux policy (the store layout is incompatible with Fedora's targeted
-  base policy, which `trivalent-selinux` only extends). The MAC layer would have
-  to be re-provided with AppArmor or nixpak (see below); nothing this flake does
-  can carry it over.
-- **No automatic updates.** Until the CI (deferred) exists, `pins.nix` is bumped
-  by hand. A browser you do not update is a real risk -- budget for the manual
-  update cycle below, or do not rely on this yet.
+  absent on non-secureblue systems. Wayland still works if the session provides
+  it (`NIXOS_OZONE_WL=1`); Vulkan stays off, the browser runs on GL/ANGLE-GLES.
+- **No `trivalent-selinux`** -- NixOS has no usable SELinux (store layout is
+  incompatible with Fedora's targeted base policy). `programs.trivalent.apparmor`
+  is the stand-in; see "Kept vs degraded".
+- **No automatic updates** -- `pins.nix` is bumped by hand (see the update cycle).
 
-## Status of the guarantees
+## Status
 
-| Guarantee | State |
+| | |
 |---|---|
-| RPM body signature, signed repodata, SLSA provenance all verified, key traced to `26B4…3E41`, logs retained in `$out/share/trivalent/supply-chain-logs/` | **done** -- `verify/10-verify-supply-chain.sh` exit 0 = all three |
-| Launches, renders a real page, sandbox not silently downgraded by the FHS wrapper | **done, measured on omen15** -- `verify/30-sandbox-selfcheck.sh`; see `F4-F5-RESULTS.md` |
-| glibc compatibility (F4) | **measured on omen15** -- vendor binary needs `GLIBC_2.43`; default `glibcStrategy = "fedora-rpm"`. `F4-F5-RESULTS.md` |
-| Sandbox strength (F5) | **measured on omen15** -- unprivileged userns + seccomp-bpf, identical wrapped vs unwrapped, no setuid helper in the RPM. `F4-F5-RESULTS.md` |
-| CI (version-map + auto-update + alarms) | **not built** -- deferred by choice. `verify/*.sh` exit codes are the contract a future workflow consumes. |
+| RPM body signature + signed repodata + SLSA provenance, key `26B4…3E41`, logs in `$out/share/trivalent/supply-chain-logs/` | **done** -- `verify/10-verify-supply-chain.sh` exit 0 |
+| launches, renders a real page, FHS wrapper doesn't downgrade the sandbox | **done** -- `verify/30-sandbox-selfcheck.sh`; `F4-F5-RESULTS.md` |
+| F4 (glibc): binary needs `GLIBC_2.43`, default `glibcStrategy = "fedora-rpm"` | **done** -- `F4-F5-RESULTS.md` |
+| F5 (sandbox): unpriv userns + seccomp-bpf, wrapped == unwrapped, no setuid helper | **done** -- `F4-F5-RESULTS.md` |
+| AppArmor confinement | **opt-in, complain by default** -- `programs.trivalent.apparmor` |
+| CI (version-map + auto-update + alarms) | **not built** -- `verify/*.sh` exit codes are the contract |
 | `aarch64` | **not exposed** -- see below |
-
-Nothing here is "measured" until `F4-F5-RESULTS.md` says so for the current
-Trivalent version. Re-run the F4 build and `verify/30-sandbox-selfcheck.sh` on a
-version bump whose changelog touches the launcher, sandbox, or build toolchain.
 
 ## verify/ -- the scripts (exit codes are the judgement)
 
@@ -190,30 +167,29 @@ the checks above make the break a *build* failure. Drop the `follows` and pin
 `trivalent-nix`'s own `nixpkgs` if you'd rather freeze it entirely (costs a 2nd
 nixpkgs in the closure and risks GL-driver ABI skew against the host).
 
-## Kept vs degraded (measured on omen15, Trivalent 152.0.7977.82)
+## Kept vs degraded vs a secureblue install
 
 **Kept**
 
-- Trivalent's Chromium patchset + hardened compile flags -- the binary is shipped
-  byte-for-byte, only ELF interpreter/RPATH patched for glibc 2.43.
-- Intel CET tunables (`glibc.cpu.x86_ibt=on`, `x86_shstk`) -- `trivalent.sh` run unmodified.
-- Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised -- same.
+- Trivalent's Chromium patchset + hardened compile flags -- binary shipped
+  byte-for-byte, only ELF interpreter/RPATH patched.
+- Intel CET tunables (`x86_ibt`, `x86_shstk`) -- `trivalent.sh` run unmodified.
+- Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised.
 - Renderer sandbox: namespace (user/PID/net) + seccomp-bpf + TSYNC + broker Yama
-  -- `chrome://sandbox` reports "adequately sandboxed"; strace parity wrapped vs
-  unwrapped (`F4-F5-RESULTS.md`).
-- Wayland/ozone active, HW-accelerated canvas/compositing/raster/WebGL and HW
-  video decode+encode (`chrome://gpu`).
-- Three-layer supply-chain verification of the RPM (`verify/`).
+  (`chrome://sandbox`: "adequately sandboxed"; strace parity in `F4-F5-RESULTS.md`).
+- HW-accelerated canvas/compositing/raster/WebGL + HW video decode/encode
+  (`chrome://gpu`).
+- Three-layer supply-chain verification of the RPM.
 
 **Degraded / absent**
 
-- `trivalent-selinux`: **NixOS has no usable SELinux** (platform limitation, not a
-  packaging gap) and no AppArmor profile ships here -- the browser process runs
-  with **no MAC confinement**. Recover it with AppArmor or nixpak, not SELinux.
-- GPU process is **not sandboxed** (`chrome://gpu` -> `Sandboxed: false`) under the
+- `trivalent-selinux` -- no SELinux on NixOS. `programs.trivalent.apparmor` is
+  the stand-in (opt-in; read-mostly, `$HOME` blind except the browser's own
+  dirs + downloads, hard denies on ssh/gpg/keyrings/history/credential stores).
+  Off or in complain mode, the browser process has no MAC confinement.
+- GPU process not sandboxed (`chrome://gpu` -> `Sandboxed: false`) under the
   FHS+bwrap wrap; the renderer and network sandboxes are unaffected.
-- Vulkan disabled -- secureblue's `/etc/trivalent/trivalent.conf` (which sets
-  `--use-vulkan`) is not read; runs on GL/ANGLE-GLES instead.
-- No automatic updates -- `pins.nix` bumped by hand until CI exists.
-- Yama non-broker ptrace protection off -- host `kernel.yama.ptrace_scope = 1`
-  (`security.nix`); secureblue uses `3`.
+- Vulkan disabled (`/etc/trivalent/trivalent.conf` not read) -- GL/ANGLE-GLES.
+- No automatic updates -- `pins.nix` bumped by hand.
+- Yama non-broker ptrace protection depends on the host `kernel.yama.ptrace_scope`
+  (secureblue uses `3`).
