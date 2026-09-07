@@ -98,6 +98,11 @@
 
       checks = forAllSystems (system: {
         formatting = treefmtEval.${system}.config.build.check self;
+        # builds the package -> runs its installCheckPhase (interpreter +
+        # DT_NEEDED resolution + launcher-structure guard). This is the
+        # nixpkgs-drift gate: `nix flake check` goes red before a broken
+        # browser can be deployed.
+        trivalent = self.packages.${system}.trivalent;
         # cheap eval-only gate: the pinned SRI is well-formed and the log exists
         pin-log-present = (pkgsFor system).runCommand "pin-log-present" { } ''
           test -f ${./verify/logs + "/${pins.x86_64.versionRelease}"}/summary.txt

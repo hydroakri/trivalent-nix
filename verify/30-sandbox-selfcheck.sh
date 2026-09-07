@@ -131,4 +131,33 @@ if [ -n "$UNWRAP_BIN" ]; then
   fi
   echo "RESULT: wrapped and unwrapped agree on sandbox call path [$w]"
 fi
+
+# --- AppArmor attach check (catches a silent detach after a buildFHSEnv/nixpkgs
+#     change: profile loaded but the running browser is unconfined). Opt-in with
+#     CHECK_APPARMOR=1; fails with 54 only if EXPECT_APPARMOR=1. ---
+if [ "${CHECK_APPARMOR:-0}" = 1 ]; then
+  if grep -q '^trivalent ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    prof="$(
+      cd "$wd" && "$WRAP_BIN" --headless=new --user-data-dir="$wd/aa" about:blank &
+      p=$!
+      sleep 3
+      cat /proc/$p/attr/current 2>/dev/null
+      kill $p 2>/dev/null
+    )"
+    echo "[selfcheck] /proc/<trivalent>/attr/current = ${prof:-<unreadable>}"
+    case "$prof" in
+    trivalent\ * | trivalent) echo "RESULT: AppArmor profile 'trivalent' is attached" ;;
+    *)
+      echo "WARN: 'trivalent' profile is loaded but the browser runs as [${prof:-unknown}] -- attach path broke" >&2
+      [ "${EXPECT_APPARMOR:-0}" = 1 ] && exit 54
+      ;;
+    esac
+  else
+    echo "[selfcheck] no 'trivalent' AppArmor profile loaded (skip)"
+    [ "${EXPECT_APPARMOR:-0}" = 1 ] && {
+      echo "FAIL: EXPECT_APPARMOR=1 but no profile loaded" >&2
+      exit 54
+    }
+  fi
+fi
 exit 0

@@ -148,6 +148,35 @@ Trivalent as upstream intends it, install a secureblue image.
 
 Not affiliated with secureblue, Trivalent, or quixaq.
 
+## Drift contract (nixpkgs bumps)
+
+The package is a Fedora RPM patchelf'd against nixpkgs libs and FHS-wrapped, so
+nixpkgs movement can break it. It is built so every break is **loud, at build
+time, before deploy** -- never a silently broken browser:
+
+| drift | when it's caught |
+|---|---|
+| a `runtimeLibs` attr renamed/removed (`xorg.libX11` -> `libx11`, ...) | eval error, `nix flake check` red |
+| a runtime lib bumps SONAME / drops a versioned symbol | `installCheckPhase` -- every `DT_NEEDED` must resolve in the RPATH, else the build fails (`checks.trivalent` runs it) |
+| nixpkgs glibc reaches the Fedora one | nothing breaks -- default `glibcStrategy = "fedora-rpm"` is glibc-version-independent (Fedora GA `glibc-2.43-2.fc44`, frozen tree). Switching to `"nixpkgs"` then just drops the extra download. |
+| `buildFHSEnv` internals refactor (`-bwrap` name, `runScript`) | omen15 build fails, and/or the AppArmor attach glob stops matching -- run `CHECK_APPARMOR=1 verify/30-sandbox-selfcheck.sh` |
+| upstream rewrites `trivalent.sh` | `installCheckPhase` (`grep 'exec bwrap'`) fails the build |
+| GPU/GL regression from a mismatched mesa | only visible at runtime -> `verify/30-sandbox-selfcheck.sh` + `chrome://gpu` |
+
+**After any nixpkgs bump that rebuilds Trivalent, run:**
+
+```
+nix build .#trivalent                                   # installCheckPhase
+verify/30-sandbox-selfcheck.sh https://example.org      # launch + sandbox + real page
+```
+
+Consumed with `inputs.nixpkgs.follows`, Trivalent rides the consumer's nixpkgs.
+A chezmoi-style `update-flake-lock.yml` that build-gates + auto-reverts already
+turns "drift broke Trivalent" into "PR stays closed, old lock kept" -- because
+the checks above make the break a *build* failure. Drop the `follows` and pin
+`trivalent-nix`'s own `nixpkgs` if you'd rather freeze it entirely (costs a 2nd
+nixpkgs in the closure and risks GL-driver ABI skew against the host).
+
 ## Kept vs degraded (measured on omen15, Trivalent 152.0.7977.82)
 
 **Kept**

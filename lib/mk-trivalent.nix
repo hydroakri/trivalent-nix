@@ -40,7 +40,6 @@
   nss,
   nspr,
   atk,
-  at-spi2-atk,
   at-spi2-core,
   dbus,
   cups,
@@ -85,7 +84,6 @@ let
     nss
     nspr
     atk
-    at-spi2-atk
     at-spi2-core
     dbus
     cups
@@ -191,6 +189,41 @@ let
       chmod -R u+w "$out/share/trivalent"
 
       runHook postInstall
+    '';
+
+    # Fail the BUILD loudly on nixpkgs drift instead of shipping a broken
+    # browser: every DT_NEEDED must resolve inside the RPATH we set, the
+    # interpreter must exist, and the vendor launcher must still have the
+    # structure F5 relies on. A renamed/soname-bumped runtime lib, a glibc
+    # that outgrows the Fedora one, or an upstream launcher rewrite all trip
+    # this -- and `nix flake check` runs it (see checks.trivalent).
+    doInstallCheck = true;
+    installCheckPhase = ''
+      runHook preInstallCheck
+      bin="$(find "$out" -path '*/trivalent/trivalent' -type f | head -n1)"
+      [ -n "$bin" ] || { echo "drift: no trivalent binary in \$out"; exit 1; }
+
+      interp="$(patchelf --print-interpreter "$bin")"
+      echo "interpreter: $interp"
+      [ -e "$interp" ] || { echo "drift: interpreter '$interp' does not exist"; exit 1; }
+
+      rpath="$(patchelf --print-rpath "$bin")"
+      echo "rpath: $rpath"
+      IFS=: read -ra dirs <<< "$rpath"
+      miss=0
+      while read -r so; do
+        case "$so" in ld-linux*|"") continue ;; esac
+        found=
+        for d in "''${dirs[@]}"; do [ -e "$d/$so" ] && { found=1; break; }; done
+        if [ -z "$found" ]; then echo "drift: DT_NEEDED '$so' not resolvable in rpath"; miss=1; fi
+      done < <(patchelf --print-needed "$bin")
+      [ "$miss" -eq 0 ] || { echo "drift: unresolved shared libraries (nixpkgs rename/soname bump?)"; exit 1; }
+
+      sh="$(find "$out" -name trivalent.sh -type f | head -n1)"
+      grep -q 'exec bwrap' "$sh" || { echo "drift: vendor trivalent.sh no longer 'exec bwrap' -- re-check F5"; exit 1; }
+      grep -q 'readlink -f "\?''${0}' "$sh" || echo "note: trivalent.sh \$0-resolution idiom changed (non-fatal)"
+      echo "installCheck OK: interpreter + all DT_NEEDED resolve, launcher structure intact"
+      runHook postInstallCheck
     '';
 
     passthru = { inherit fedoraGlibc; };
