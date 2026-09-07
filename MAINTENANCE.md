@@ -11,6 +11,74 @@ that fails closed when reality stops matching it.
 
 ---
 
+## Repository setup
+
+One-time, on `github.com/hydroakri/trivalent-nix`, so the unattended workflows
+can open and merge their own PRs. Without these, `update-trivalent.yml` /
+`update-flake-lock.yml` fail fast at the `Require GH_TOKEN_FOR_UPDATES` step or
+can't merge.
+
+### 1. `GH_TOKEN_FOR_UPDATES` secret
+
+The default `GITHUB_TOKEN` can't trigger `ci` on a bot-pushed branch (pushes
+from `GITHUB_TOKEN` don't start `workflow` runs), so auto-merge would wait
+forever. Use a personal access token:
+
+- Fine-grained PAT (preferred): **Only select repositories -> hydroakri/trivalent-nix**,
+  Repository permissions: **Contents: Read and write**, **Pull requests: Read and
+  write**. (That's all the workflows call: `git push`, `gh pr create/merge/close`,
+  `gh issue create/comment`.)
+- or a classic PAT with the `repo` scope.
+
+Add it at **Settings -> Secrets and variables -> Actions -> New repository
+secret**, name `GH_TOKEN_FOR_UPDATES`.
+
+### 2. "Allow auto-merge"
+
+**Settings -> General -> Pull Requests -> Allow auto-merge**. The version-bump
+job merges with `gh pr merge --squash` only after `gh pr checks --watch` goes
+green; the key-rotation job never merges.
+
+### 3. Branch protection on `main`
+
+**Settings -> Branches -> Add branch ruleset** (or classic rule) for `main`:
+
+- **Require status checks to pass** -> add **`ci`** (the job in `ci.yml`; it
+  appears in the list after the first PR runs it once).
+- **Require a pull request before merging** (the bot always uses a PR anyway).
+- **Do NOT "Require approvals"** -- keep the approving-review count at **0**. The
+  bot has nobody to approve its PR; a non-zero count makes
+  `gh pr merge --squash` in `update-trivalent.yml` fail on every version bump,
+  which defeats unattended operation. The green `ci` check is the gate.
+- Leave `matrix-nixpkgs` **out** of the required set -- it is `continue-on-error`
+  and only a drift signal.
+
+This is what makes auto-merge safe without a reviewer: a bad pin ->
+`checks.supply-chain` / `installCheckPhase` red -> `ci` red -> the `Wait for CI,
+merge or roll back` step closes the PR, `main` never moves. The one path that
+*does* need a human -- a signing-key / trusted-root change -- never auto-merges
+(label `needs-human-approval`, and `40-review.sh` R1 stays red until a person
+edits the `KEY-PROVENANCE.md` row).
+
+### 4. Labels
+
+The workflows pass `--label` and fail if the label doesn't exist. Create:
+`automated`, `dependencies`, `blocked`, `security`, `needs-human-approval`.
+
+```sh
+for l in automated dependencies blocked security needs-human-approval; do
+  gh label create "$l" --repo hydroakri/trivalent-nix 2>/dev/null || true
+done
+```
+
+### 5. (optional) Actions permissions
+
+**Settings -> Actions -> General -> Workflow permissions**: "Read repository
+contents" is enough -- every write goes through `GH_TOKEN_FOR_UPDATES`, not the
+default token. No need to grant the default token write.
+
+---
+
 ## Sigstore trusted-root rotation
 
 `lib/verify.nix` layer 3 verifies the SLSA provenance's Sigstore/Rekor

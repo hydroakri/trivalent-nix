@@ -6,9 +6,11 @@ name: update-trivalent
 # never touch pins.nix. No binary cache -- the package is a repack of a
 # prebuilt RPM, so consumers build it locally in minutes.
 #
-# Repo prerequisites: secret GH_TOKEN_FOR_UPDATES; "Allow auto-merge" on; a
-# branch-protection rule on main requiring the `ci` check; labels blocked +
-# security.
+# Repo prerequisites (see MAINTENANCE.md "Repository setup"):
+#   - secret GH_TOKEN_FOR_UPDATES (PAT: contents:write + pull-requests:write)
+#   - Settings > General > "Allow auto-merge" enabled
+#   - branch-protection rule on main requiring the `ci` status check
+#   - labels: automated, dependencies, blocked, security, needs-human-approval
 
 on:
   workflow_dispatch:
@@ -50,9 +52,11 @@ jobs:
         id: update
         run: |
           set +e
-          nix run .#update > update.json
+          # write the JSON outside the work tree so it never shows up in
+          # `git status` and trips the working-tree guard below
+          nix run .#update > "$RUNNER_TEMP/update.json"
           echo "rc=$?" >> "$GITHUB_OUTPUT"
-          cat update.json
+          cat "$RUNNER_TEMP/update.json"
 
       - name: Classify the outcome
         id: outcome
@@ -89,8 +93,11 @@ jobs:
             echo "no-op -- nothing to do"; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "kind=version" >> "$GITHUB_OUTPUT"
-          # working-tree guard: a version bump may only touch these
-          if git status --porcelain | grep -vE '^.M? (pins\.nix|verify/logs/)' ; then
+          # working-tree guard: a version bump may only touch these.
+          # `git status --porcelain` is `XY <path>` -- 2 status cols + a space --
+          # for both ` M` (tracked, modified) and `??` (untracked, e.g. a new
+          # verify/logs/<v> dir), so anchor on `^.{3}` not `^.M? `.
+          if git status --porcelain | grep -vE '^.{3}(pins\.nix|verify/logs/)' ; then
             echo "::error::updater changed files it must not for a version bump"
             git checkout -- . && git clean -fd
             exit 1
@@ -101,7 +108,7 @@ jobs:
       - name: Guard the key-rotation working tree
         if: steps.outcome.outputs.kind == 'key-rotation'
         run: |
-          if git status --porcelain | grep -vE '^.M? (verify/fingerprint\.env|pins\.nix|KEY-PROVENANCE\.md)$' ; then
+          if git status --porcelain | grep -vE '^.{3}(verify/fingerprint\.env|pins\.nix|KEY-PROVENANCE\.md)$' ; then
             echo "::error::key-rotation touched files it must not"
             git checkout -- . && git clean -fd
             exit 1
@@ -117,11 +124,12 @@ jobs:
         id: pr
         if: steps.outcome.outputs.proceed == 'true'
         run: |
-          msg="$(jq -r '.[0].commitMessage' update.json)"
-          body="$(jq -r '.[0].commitBody' update.json)"
-          mapfile -t files < <(jq -r '.[0].files[]' update.json)
+          U="$RUNNER_TEMP/update.json"
+          msg="$(jq -r '.[0].commitMessage' "$U")"
+          body="$(jq -r '.[0].commitBody' "$U")"
+          mapfile -t files < <(jq -r '.[0].files[]' "$U")
           if [ "${{ steps.outcome.outputs.kind }}" = "key-rotation" ]; then
-            new8="$(jq -r '.[0].newVersion' update.json | cut -c1-8)"
+            new8="$(jq -r '.[0].newVersion' "$U" | cut -c1-8)"
             BR="bot/key-rotation-$new8"
             labels=(--label automated --label security --label needs-human-approval)
           else
