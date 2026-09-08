@@ -22,8 +22,8 @@ pkgs.testers.runNixOSTest {
     {
       imports = [ self.nixosModules.default ];
       programs.trivalent.enable = true;
-      # keep the profile out of the way of this test
-      programs.trivalent.apparmor.enable = false;
+      # security.apparmor.enable is left at its default (false), so the module
+      # contributes no profile -- this test is about the sandbox, not AppArmor.
 
       users.users.tester = {
         isNormalUser = true;

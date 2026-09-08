@@ -1,11 +1,19 @@
-# NixOS module: install Trivalent + (opt-in) an AppArmor profile that stands in
-# for the `trivalent-selinux` policy NixOS cannot run.
+# NixOS module: install Trivalent, and -- when AppArmor is on system-wide --
+# an AppArmor profile that stands in for the `trivalent-selinux` policy NixOS
+# cannot run.
 #
 # The profile is generated from the package's own store paths, so a version
-# bump needs no edits here. It ships in COMPLAIN mode by default: every access
-# the browser makes outside the policy is logged (`journalctl -k --grep=apparmor
-# ... profile="trivalent"`) but not blocked, so it is safe to deploy and tune.
-# Flip `programs.trivalent.apparmor.enforce = true` after a soak.
+# bump needs no edits here. It is registered with `state = "complain"` by
+# default (mkDefault): every access outside the policy is logged (`journalctl
+# -k --grep=apparmor ... profile="trivalent"`) but not blocked, safe to deploy
+# and tune. After a soak:
+#   security.apparmor.policies.trivalent.state = "enforce";   # or "disable"
+#
+# There is ONE switch: `security.apparmor.enable` (system-wide, not ours).
+# On  -> `programs.trivalent.enable = true` also contributes the profile,
+#        automatically -- no per-module opt-in.
+# Off -> the module contributes nothing AppArmor-related. No assertion, no
+#        forced enable.
 #
 # Confinement shape (approaching an SELinux targeted domain):
 #   - read-only almost everywhere; the ONLY writable app state is
@@ -74,9 +82,9 @@ let
     # attach by store glob so version bumps need no change here. One attachment
     # expression only -- brace alternation covers both the buildFHSEnv `-bwrap`
     # launcher (what the bin/ symlink resolves to) and the bin/trivalent path.
-    profile trivalent /nix/store/*-trivalent-*{-bwrap,/bin/trivalent} flags=(attach_disconnected,mediate_deleted${
-      lib.optionalString (!cfg.apparmor.enforce) ",complain"
-    }) {
+    # complain-vs-enforce is `security.apparmor.policies.trivalent.state`, not a
+    # flag baked in here.
+    profile trivalent /nix/store/*-trivalent-*{-bwrap,/bin/trivalent} flags=(attach_disconnected,mediate_deleted) {
       include <abstractions/base>
       include <abstractions/nameservice>
       include <abstractions/fonts>
@@ -252,23 +260,12 @@ in
       description = "The Trivalent package to install and confine.";
     };
 
+    # No `apparmor.enable` and no `enforce`: the profile is contributed whenever
+    # AppArmor is on system-wide (`security.apparmor.enable = true`), and
+    # complain-vs-enforce is the native `security.apparmor.policies.trivalent.state`
+    # (module default "complain"). These two are the only Trivalent-side knobs --
+    # extra profile lines; inert while AppArmor is off.
     apparmor = {
-      enable = lib.mkEnableOption ''
-        an AppArmor profile confining Trivalent -- a stand-in for the
-        `trivalent-selinux` policy that NixOS's store layout cannot run'';
-
-      enforce = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          false: complain mode -- violations are logged, not blocked. Safe to
-          deploy; audit with
-          `journalctl -k --grep='apparmor.*profile="trivalent"'`, then set true.
-          true: enforce mode -- violations are blocked. A missing rule means a
-          broken browser (worse with `security.apparmor.killUnconfinedConfinables`).
-        '';
-      };
-
       denyHomePaths = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
@@ -305,24 +302,18 @@ in
         environment.systemPackages = lib.optional (cfg.package != null) cfg.package;
       }
 
-      (lib.mkIf cfg.apparmor.enable {
-        # Turn the LSM on for them -- asking for the profile implies wanting
-        # AppArmor. mkDefault so an explicit `security.apparmor.enable = false`
-        # elsewhere still wins (and then the assertion below explains the clash).
-        security.apparmor.enable = lib.mkDefault true;
-        assertions = [
-          {
-            assertion = config.security.apparmor.enable;
-            message = ''
-              programs.trivalent.apparmor.enable is set but security.apparmor.enable
-              resolved to false (something else forced it off). Either drop that
-              override or set programs.trivalent.apparmor.enable = false.
-            '';
-          }
-        ];
-        security.apparmor.policies."trivalent".profile = profile;
-        # apparmor.d abstractions the profile includes
-        security.apparmor.packages = lib.mkDefault [ pkgs.apparmor-profiles ];
+      # When AppArmor is on system-wide, contribute the Trivalent profile --
+      # automatically, no separate opt-in. `security.apparmor.enable` is the one
+      # switch; this module never sets it. Off -> this whole block is absent,
+      # nothing to fall back from. `apparmor-profiles` (for the abstractions the
+      # profile includes) is already pulled in unconditionally by NixOS's
+      # `security/apparmor/profiles.nix`, so we don't touch
+      # `security.apparmor.packages` here.
+      (lib.mkIf config.security.apparmor.enable {
+        security.apparmor.policies."trivalent" = {
+          state = lib.mkDefault "complain";
+          inherit profile;
+        };
       })
     ]
   );

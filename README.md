@@ -31,17 +31,23 @@ inputs.trivalent-nix.inputs.nixpkgs.follows = "nixpkgs";   # match your glibc / 
 
 # a module
 imports = [ trivalent-nix.nixosModules.default ];
-programs.trivalent = {
-  enable = true;
-  apparmor.enable = true;    # opt-in confinement, see below (complain by default)
-  apparmor.enforce = false;
-};
+programs.trivalent.enable = true;
+security.apparmor.enable = true;   # optional; see below
 ```
 
-`enable` installs the package (binary + `.desktop` + icons). `apparmor.enable`
-turns on `security.apparmor.enable` for you (`mkDefault`); if you have forced it
-off elsewhere the build stops with an assertion. Options: `package`,
-`apparmor.{enable,enforce,denyHomePaths,readableHomePaths}`.
+`programs.trivalent.enable = true` is all that's required -- it installs the
+package (binary + `.desktop` + icons).
+
+**All options:**
+
+| option | required? | default | what it does |
+|---|---|---|---|
+| `programs.trivalent.enable` | **yes** | `false` | install the package |
+| `programs.trivalent.package` | optional | `trivalent-nix.packages.${system}.trivalent` | the package to install/confine |
+| `programs.trivalent.apparmor.denyHomePaths` | optional | `[ ]` | extra `@{HOME}` globs the browser must never touch |
+| `programs.trivalent.apparmor.readableHomePaths` | optional | `[ ]` | extra `@{HOME}` globs the browser may READ |
+| `security.apparmor.enable` (NixOS) | optional | `false` | when `true`, the Trivalent confinement profile (stand-in for `trivalent-selinux`) is loaded automatically |
+| `security.apparmor.policies.trivalent.state` (NixOS) | optional | `"complain"` (set by this module via `mkDefault`) | `"complain"` logs violations, `"enforce"` blocks them (set after a soak: `journalctl -k --grep='apparmor.*profile="trivalent"'`), `"disable"` drops just this profile |
 
 The flake builds **x86_64-linux only** -- on another arch the build stops with
 "no Trivalent package is available for <system>" rather than installing nothing.
@@ -63,8 +69,8 @@ No binary cache is published -- `.#trivalent` is a repack of a prebuilt RPM
   absent on non-secureblue systems. Wayland still works if the session provides
   it (`NIXOS_OZONE_WL=1`); Vulkan stays off, the browser runs on GL/ANGLE-GLES.
 - **No `trivalent-selinux`** -- NixOS has no usable SELinux (store layout is
-  incompatible with Fedora's targeted base policy). `programs.trivalent.apparmor`
-  is the stand-in; see "Kept vs degraded".
+  incompatible with Fedora's targeted base policy). The auto-loaded AppArmor
+  profile is the stand-in; see "Kept vs degraded".
 - **Updates are unattended** -- `.github/workflows/update-trivalent.yml` runs
   `nix run .#update` daily, gates on `nix flake check`, auto-merges on green,
   F1 events halt to a GitHub issue (see "Automation").
@@ -77,7 +83,7 @@ No binary cache is published -- `.#trivalent` is a repack of a prebuilt RPM
 | launches, renders a real page, FHS wrapper doesn't downgrade the sandbox | **done** -- `verify/30-sandbox-selfcheck.sh`; `F4-F5-RESULTS.md` |
 | F4 (glibc): binary needs `GLIBC_2.43`, default `glibcStrategy = "fedora-rpm"` | **done** -- `F4-F5-RESULTS.md` |
 | F5 (sandbox): unpriv userns + seccomp-bpf, wrapped == unwrapped, no setuid helper | **done** -- `F4-F5-RESULTS.md` |
-| AppArmor confinement | **opt-in, complain by default** -- `programs.trivalent.apparmor` |
+| AppArmor confinement | **auto when `security.apparmor.enable`, `state = "complain"` by default** |
 | unattended auto-update + drift CI | **done** -- `.github/workflows/`, `nix run .#update`; see "Automation" |
 | `aarch64` | **not exposed** -- see below |
 
@@ -277,10 +283,11 @@ nixpkgs in the closure and risks GL-driver ABI skew against the host).
 
 **Degraded / absent**
 
-- `trivalent-selinux` -- no SELinux on NixOS. `programs.trivalent.apparmor` is
-  the stand-in (opt-in; read-mostly, `$HOME` blind except the browser's own
-  dirs + downloads, hard denies on ssh/gpg/keyrings/history/credential stores).
-  Off or in complain mode, the browser process has no MAC confinement.
+- `trivalent-selinux` -- no SELinux on NixOS. The AppArmor profile is the
+  stand-in (loaded automatically when `security.apparmor.enable = true`;
+  read-mostly, `$HOME` blind except the browser's own dirs + downloads, hard
+  denies on ssh/gpg/keyrings/history/credential stores). With AppArmor off or
+  the profile in complain mode, the browser process has no MAC confinement.
 - GPU process not sandboxed (`chrome://gpu` -> `Sandboxed: false`) under the
   FHS+bwrap wrap; the renderer and network sandboxes are unaffected.
 - Vulkan disabled (`/etc/trivalent/trivalent.conf` not read) -- GL/ANGLE-GLES.
