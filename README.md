@@ -2,295 +2,231 @@
 
 [![ci](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hydroakri/trivalent-nix/actions/workflows/ci.yml)
 
-A standalone Nix flake that packages [secureblue Trivalent](https://github.com/secureblue/Trivalent)
-(hardened Chromium) from the upstream signed RPM. The **three-layer supply-chain
-verification runs in the build graph** (`lib/verify.nix`, pure + fully offline):
-the RPM only reaches `src` after its GPG body signature, the GPG-signed repodata,
-and the SLSA provenance (whole Sigstore/Rekor chain, via cosign against a
-vendored trusted root) all check out -- so `nix build` *is* the verification.
+secureblue [Trivalent](https://github.com/secureblue/Trivalent) (hardened
+Chromium), repackaged from the upstream signed RPM. Verification runs **in the
+build graph**: `nix build` produces the package only after the RPM's GPG body
+signature, the GPG-signed repodata, and the SLSA provenance (whole Sigstore/Rekor
+chain, offline, via cosign against a vendored trusted root) all check out.
 
-Packaging technique (RPM unpack + FHS wrap) is borrowed from
+```
+nix run github:hydroakri/trivalent-nix#trivalent
+```
+
+**x86_64-linux only.** Unpack + FHS-wrap technique from
 [`quixaq/trivalent-nix`](https://github.com/quixaq/trivalent-nix); its
-zero-verification trust baseline is **not** -- this repo is not a fork.
+zero-verification trust baseline is not -- this is not a fork. Outputs:
+`packages.x86_64-linux.{trivalent,supply-chain}`, `nixosModules.default`.
 
-```
-nix build github:hydroakri/trivalent-nix#trivalent
-nix run   github:hydroakri/trivalent-nix#trivalent
-```
-
-Output: `packages.x86_64-linux.{trivalent,supply-chain}`, `nixosModules.default`.
-
-## Adding it to a NixOS system
-
-Wire `trivalent-nix.nixosModules.default` into your host and set the options:
+## Install (NixOS)
 
 ```nix
-# flake.nix
 inputs.trivalent-nix.url = "github:hydroakri/trivalent-nix";
-inputs.trivalent-nix.inputs.nixpkgs.follows = "nixpkgs";   # match your glibc / mesa
+inputs.trivalent-nix.inputs.nixpkgs.follows = "nixpkgs";   # share your glibc / mesa
 
-# a module
-imports = [ trivalent-nix.nixosModules.default ];
-programs.trivalent.enable = true;
-security.apparmor.enable = true;   # optional; see below
+imports = [ inputs.trivalent-nix.nixosModules.default ];
+
+programs.trivalent.enable = true;   # required: install the package (binary + .desktop + icons)
+security.apparmor.enable  = true;   # OPTIONAL: when on, the Trivalent confinement
+                                    # profile (SELinux stand-in) loads, in complain mode
 ```
 
-`programs.trivalent.enable = true` is all that's required -- it installs the
-package (binary + `.desktop` + icons).
+`programs.trivalent.enable` is the only required setting.
+`security.apparmor.enable` is a system-wide NixOS switch -- this module never
+sets it -- and while it is on the Trivalent profile loads automatically. After a
+soak (`journalctl -k --grep 'profile="trivalent"'`), make it block:
 
-**All options:**
+```nix
+security.apparmor.policies.trivalent.state = "enforce";   # or "disable" to drop just this profile
+```
 
-| option | required? | default | what it does |
-|---|---|---|---|
-| `programs.trivalent.enable` | **yes** | `false` | install the package |
-| `programs.trivalent.package` | optional | `trivalent-nix.packages.${system}.trivalent` | the package to install/confine |
-| `programs.trivalent.apparmor.denyHomePaths` | optional | `[ ]` | extra `@{HOME}` globs the browser must never touch |
-| `programs.trivalent.apparmor.readableHomePaths` | optional | `[ ]` | extra `@{HOME}` globs the browser may READ |
-| `security.apparmor.enable` (NixOS) | optional | `false` | when `true`, the Trivalent confinement profile (stand-in for `trivalent-selinux`) is loaded automatically |
-| `security.apparmor.policies.trivalent.state` (NixOS) | optional | `"complain"` (set by this module via `mkDefault`) | `"complain"` logs violations, `"enforce"` blocks them (set after a soak: `journalctl -k --grep='apparmor.*profile="trivalent"'`), `"disable"` drops just this profile |
+Niche knobs: `programs.trivalent.package` (override the package),
+`programs.trivalent.apparmor.{denyHomePaths,readableHomePaths}` (extra `@{HOME}`
+globs the browser must never touch / may only read).
 
-The flake builds **x86_64-linux only** -- on another arch the build stops with
-"no Trivalent package is available for <system>" rather than installing nothing.
+**Without the module:** `environment.systemPackages = [
+inputs.trivalent-nix.packages.x86_64-linux.trivalent ];` or `nix profile install
+github:hydroakri/trivalent-nix#trivalent`. No binary cache is published -- a
+repack of a prebuilt RPM, ~2 min to build locally.
 
-Just the package, no module: `environment.systemPackages = [
-trivalent-nix.packages.x86_64-linux.trivalent ];` or `nix profile install
-github:hydroakri/trivalent-nix#trivalent`.
-
-No binary cache is published -- `.#trivalent` is a repack of a prebuilt RPM
-(FODs + patchelf + FHS wrap), so it builds locally in a couple of minutes.
-
-### Requirements / caveats
+## Caveats
 
 - **Unprivileged user namespaces** must be available (kernel default; some
-  hardening profiles turn them off). `buildFHSEnv` and Chromium's renderer
+  hardening profiles disable them) -- `buildFHSEnv` and Chromium's renderer
   sandbox both need them.
-- **Wayland/Vulkan flags are not applied.** The vendor `trivalent.conf` that
-  picks `--ozone-platform=wayland` / `--use-vulkan` lives at `/etc/trivalent/`,
-  absent on non-secureblue systems. Wayland still works if the session provides
-  it (`NIXOS_OZONE_WL=1`); Vulkan stays off, the browser runs on GL/ANGLE-GLES.
-- **No `trivalent-selinux`** -- NixOS has no usable SELinux (store layout is
-  incompatible with Fedora's targeted base policy). The auto-loaded AppArmor
-  profile is the stand-in; see "Kept vs degraded".
-- **Updates are unattended** -- `.github/workflows/update-trivalent.yml` runs
-  `nix run .#update` daily, gates on `nix flake check`, auto-merges on green,
-  F1 events halt to a GitHub issue (see "Automation").
+- **Wayland/Vulkan flags aren't applied** -- the vendor
+  `/etc/trivalent/trivalent.conf` is absent on non-secureblue systems. Wayland
+  still works via `NIXOS_OZONE_WL=1`; Vulkan stays off (GL/ANGLE-GLES).
+- Consumed with `inputs.nixpkgs.follows`, Trivalent rides your nixpkgs; a bad
+  bump is a *build* failure ([Drift](#drift-nixpkgs-bumps)), so a build-gated
+  `update-flake-lock` auto-reverts. Drop the `follows` to freeze it (2nd nixpkgs
+  in the closure; risks GL-driver ABI skew).
+
+## Relationship to upstream -- read this
+
+**Not an upstream-supported way to run Trivalent.** secureblue ships it for
+**Fedora Atomic images only**, with a SELinux module, distro config, image-level
+provenance, and automatic updates. Running the RPM on NixOS is a community
+re-pack, same category as AUR `trivalent-bin` / `quixaq/trivalent-nix` -- neither
+endorsed nor tested by secureblue. Not affiliated with secureblue, Trivalent, or
+quixaq.
 
 ## Status
 
-| | |
-|---|---|
-| RPM body signature + signed repodata + SLSA provenance (full Sigstore/Rekor chain, **offline**), key `26B4…3E41` | **done, in the build graph** -- `lib/verify.nix` / `checks.supply-chain`; cosign against the vendored `verify/sigstore-trusted-root.json` (rotation: `MAINTENANCE.md`) |
-| launches, renders a real page, FHS wrapper doesn't downgrade the sandbox | **done** -- `verify/30-sandbox-selfcheck.sh`; `F4-F5-RESULTS.md` |
-| F4 (glibc): binary needs `GLIBC_2.43`, default `glibcStrategy = "fedora-rpm"` | **done** -- `F4-F5-RESULTS.md` |
-| F5 (sandbox): unpriv userns + seccomp-bpf, wrapped == unwrapped, no setuid helper | **done** -- `F4-F5-RESULTS.md` |
-| AppArmor confinement | **auto when `security.apparmor.enable`, `state = "complain"` by default** |
-| unattended auto-update + drift CI | **done** -- `.github/workflows/`, `nix run .#update`; see "Automation" |
-| `aarch64` | **not exposed** -- see below |
+All green on x86_64-linux, all in `nix flake check` / CI:
 
-## verify/ -- the scripts (exit codes are the judgement)
+- **3-layer supply chain** (`checks.supply-chain`, offline, key `26B4…3E41`) --
+  cosign against the vendored `verify/sigstore-trusted-root.json` (rotation:
+  `MAINTENANCE.md`).
+- **nixpkgs-drift gate** (`checks.trivalent` -> `installCheckPhase`) and
+  **`checks.launcher-scrub`** (the `LD_PRELOAD` scrub, behavioural) and
+  **`verify/40-review.sh`** (independent review: fingerprint + trusted-root pins).
+- **F4** (binary needs `GLIBC_2.43` -> pinned Fedora glibc) and **F5** (sandbox
+  parity, no setuid helper) verified -- `F4-F5-RESULTS.md`.
+- **Unattended auto-update + drift CI** -- see [Automation](#automation).
+- `aarch64` not exposed yet (see below).
+
+## How the verification works
+
+`lib/verify.nix` is the whole 3-layer check, pure and offline, in the build
+graph -- `nix build .#supply-chain` (and `nix flake check`) fail if any layer
+does:
+
+1. **RPM body signature** -- `rpmkeys -Kv` against the pinned key.
+2. **Signed repodata** -- `gpg --verify repomd.xml.asc`, then bind the RPM's
+   sha256 to the `<checksum>` in the signed `primary.xml`.
+3. **SLSA provenance** -- cosign verifies the full Sigstore/Rekor chain over the
+   `.intoto` bundle offline (pinned trusted root), then a jq policy on the
+   statement: subject digest == this RPM, builder id + source uri + branch +
+   arch entrypoint == the anchors in `verify/fingerprint.env`.
+
+`verify/` scripts add the parts that can't be a pure build (network, wall-clock,
+a real kernel). Exit codes are the judgement:
 
 | script | does | key exit codes |
 |---|---|---|
-| `00-bootstrap-key.sh` | acquire the signing key from **two independent channels**, check both against `fingerprint.env`, cross-check `build.yml`; append a `KEY-PROVENANCE.md` row | `0` ok · `40` mismatch, writes nothing (F1) · `41` network |
-| `20-version-map.sh <arch>` | derive "current version" from repodata **and** GitHub independently, classify any disagreement | `0` match (prints `VERSION=`) · `10` repodata lag (retries) · `21` lag past budget · `20` repodata ahead / tag absent = ALARM (F3) · `22` unparseable |
-| `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the same 3 layers as `lib/verify.nix` **plus** the live `slsa-verifier` Sigstore/Rekor chain; prints a ready-to-paste `pins.nix` block. Run this before taking a pin. | `0` = **RESULT: PASS** · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
-| `30-sandbox-selfcheck.sh [url]` | strace the wrapped **and** unwrapped browser on a real URL; assert userns + seccomp-bpf, no setuid path, sandbox syscall sets match, DOM non-empty; a system `LD_PRELOAD` sentinel never reaches the browser | `0` ok · `50` sandbox inadequate · `53` wrapped≠unwrapped · `52` empty DOM · `55` preload reached the browser |
-| `40-review.sh` | **independent review layer** -- R1 fingerprint drift, R2 version-map coverage, R3 pass-criterion, R4 Sigstore trusted-root pin + provenance. Runs in `ci.yml`. | `0` = REVIEW: PASS |
-| `99-negative-tests.sh` | proves the fail-closed paths (tamper, key flip, F2 30-vs-31, F3 reverse) actually return those codes | `0` = all fail-closed |
-
-These stay shell because they need network / wall-clock time / a real kernel --
-not expressible as a pure build. `nix run .#update` drives `20` + `10` behind a
-Nix-built, dependency-pinned PATH; `00` is the human key-rotation gate; `30` /
-`99` are run by hand. The 3-layer *verification* itself is `lib/verify.nix`
-(pure, in the build graph); `10-…` adds the live `slsa-verifier` lookup.
+| `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the 3 layers **plus** a live `slsa-verifier` Sigstore/Rekor lookup; prints a ready-to-paste `pins.nix` block | `0` PASS · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
+| `20-version-map.sh <arch>` | derive "current version" from repodata **and** GitHub independently, classify disagreement | `0` match (`VERSION=`) · `10`/`21` repodata lag · `20` repodata ahead / tag absent (F3) · `22` unparseable |
+| `00-bootstrap-key.sh` | acquire the key from **two independent channels**, check both vs `fingerprint.env`, append a `KEY-PROVENANCE.md` row | `0` ok · `40` mismatch, writes nothing (F1) · `41` network |
+| `30-sandbox-selfcheck.sh [url]` | strace wrapped **and** unwrapped browser on a real URL: userns + seccomp-bpf, no setuid path, sets match, DOM non-empty, `LD_PRELOAD` sentinel never reaches the browser | `0` ok · `50` sandbox inadequate · `52` empty DOM · `53` wrapped≠unwrapped · `55` preload reached the browser |
+| `40-review.sh` | independent review layer (R1 fingerprint, R2 version-map, R3 pass-criterion, R4 trusted-root). In `ci.yml`. | `0` REVIEW: PASS |
+| `99-negative-tests.sh` | proves the fail-closed paths return those codes | `0` all fail-closed |
 
 ## Automation
 
 `nix run .#update` (`lib/update.nix`, a Nix-built `writeShellApplication`, also
-`packages.trivalent.passthru.updateScript`) is the whole update:
+`packages.trivalent.passthru.updateScript`) is the whole update: preflight (key
++ trusted-root pins, mismatch -> `HALT.txt` + exit 40/41, no writes) ->
+`20-version-map.sh` -> `10-verify-supply-chain.sh` (+ writes `verify/logs/<v-r>/`)
+-> rewrite the `pins.nix` `x86_64` block -> `nix build .#supply-chain` re-verify
+-> emit the `updateScript` JSON. Exit: `0` bump/no-op · `20` F3 · `22`
+unparseable · `30` F2 · `40/41` key/trusted-root HALT · `42` key rotation
+**PROPOSED** · `11/12/13` a layer failed.
 
-1. **preflight** -- fetch `secureblue.gpg`, assert sha256 + fingerprint ==
-   `pins.nix` / `fingerprint.env`; assert `verify/sigstore-trusted-root.json`
-   matches its pin. Mismatch -> `HALT.txt` + exit 40/41, **no writes**.
-2. **discover** -- `verify/20-version-map.sh` (repodata vs GitHub, independently).
-3. **verify** -- `verify/10-verify-supply-chain.sh` (3 layers + the live
-   `slsa-verifier` Sigstore/Rekor lookup); writes `verify/logs/<v-r>/`.
-4. **rewrite `pins.nix`** -- regenerates the `x86_64` block (13 fields).
-5. **re-verify** -- `nix build .#supply-chain` (the pure offline gate).
-6. **emit** the `updateScript` JSON (`attrPath` / `oldVersion` / `newVersion` /
-   `files` / `commitMessage`).
-
-Exit codes: `0` bump-or-no-op · `20` F3 · `22` unparseable · `30` F2 · `40` key
-changed, evidence incomplete → HALT · `41` trusted-root mismatch · `42` key
-rotation **PROPOSED** · `11/12/13` a layer failed.
-
-**Key rotation (F1)** is semi-automated. If `repo.secureblue.dev` serves a new
-signing key, the updater checks four independent channels -- R2, the key
-committed in `secureblue/secureblue`, `%_gpg_name` in `secureblue/Trivalent`
-`build.yml`, and (from `keyserver.ubuntu.com`) whether the **old** key carries a
-*verified* certification over the new one. All four must agree, and the new key
-must be self-certified by the old private key -- something an endpoint-only
-attacker cannot produce. If so it rewrites `fingerprint.env` / `pins.nix` /
-`KEY-PROVENANCE.md` and exits 42; the workflow opens a `needs-human-approval`
-PR that is **never auto-merged**. `verify/40-review.sh` R1 fails while the row
-still says `PROPOSED-BY-BOT`, so `ci` blocks the merge until a human confirms a
-further channel (secureblue's announcement / Discord) and puts their name in
-the row. Any check missing → exit 40, full HALT, fully manual.
-
-`.github/workflows/`:
+**Key rotation (F1)** is semi-automated: a new `repo.secureblue.dev` key is
+checked against four independent channels (R2, the key in `secureblue/secureblue`,
+`%_gpg_name` in `secureblue/Trivalent` `build.yml`, and whether the **old** key
+carries a verified certification over the new one from `keyserver.ubuntu.com` --
+unforgeable by an endpoint-only attacker). All four agreeing -> the updater
+rewrites the anchors and exits 42; the workflow opens a `needs-human-approval`
+PR that is **never auto-merged**, and `40-review.sh` R1 keeps `ci` red until a
+human confirms a further channel and signs the `KEY-PROVENANCE.md` row. Any
+channel missing -> exit 40, fully manual.
 
 | workflow | trigger | does |
 |---|---|---|
-| `ci.yml` | PR + push to main | `nix flake check` + `nix build .#trivalent .#supply-chain` + `verify/40-review.sh`. **The required status check.** |
-| `update-trivalent.yml` | daily `0 6 * * *` | `nix run .#update`; on HALT -> open/update a `blocked`+`security` issue; else working-tree guard (only `pins.nix` + `verify/logs/` may change) -> pre-PR `nix flake check` -> PR `bot/trivalent-<v>` -> **auto-merge on green** (wait / 3x-retry / rollback-and-close on red). |
-| `update-flake-lock.yml` | daily `0 2 * * *` | channel health-gate -> staleness (only if `.#trivalent.drvPath` moves) -> `nix flake update` -> guard `^ M flake.lock$` -> `nix flake check` + build (the drift `installCheckPhase` is the gate) -> PR -> auto-merge/rollback. |
+| `ci.yml` | PR + push to main | `nix flake check` + `nix build .#trivalent .#supply-chain` + `40-review.sh`. **The required check.** |
+| `update-trivalent.yml` | daily | `nix run .#update`; HALT -> `blocked`+`security` issue; else working-tree guard (`pins.nix` + `verify/logs/` only) -> pre-PR `nix flake check` -> PR -> **auto-merge on green** (retry / rollback-and-close on red). |
+| `update-flake-lock.yml` | daily | health-gate -> staleness (only if `.#trivalent.drvPath` moves) -> `nix flake update` -> `nix flake check` + build -> PR -> auto-merge/rollback. |
 
-**Fully unattended.** A wrong auto-pin -> `checks.supply-chain` /
-`installCheckPhase` red -> the PR is closed, `main` never advances. The two F1
-decisions (adopting a rotated signing key, rotating the Sigstore trusted root)
-halt to a GitHub issue and are done by a human per `MAINTENANCE.md` -- the
-updater detects and stops, never adopts.
+A wrong auto-pin -> `checks.supply-chain` / `installCheckPhase` red -> PR closed,
+`main` never advances. The two F1 decisions halt to an issue and are done by a
+human per `MAINTENANCE.md`. Repo prerequisites: secret `GH_TOKEN_FOR_UPDATES`,
+"Allow auto-merge" on, branch protection requiring `ci`.
 
-Repo prerequisites: secret `GH_TOKEN_FOR_UPDATES`; "Allow
-auto-merge" enabled; a branch-protection rule on `main` requiring `ci`.
-
-### Bump by hand
-
-```
-nix run .#update                     # rewrites pins.nix + verify/logs/, prints the JSON
-./verify/40-review.sh                # -> REVIEW: PASS
-nix flake check
-git add pins.nix verify/logs && git commit
-```
+**Bump by hand:** `nix run .#update` -> `./verify/40-review.sh` -> `nix flake
+check` -> `git add pins.nix verify/logs && git commit`.
 
 ## Trust anchors (`verify/fingerprint.env`)
 
-- signing key fingerprint `26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41` -- the only
-  place it is written. Confirmed via (1) `secureblue/Trivalent` `build.yml`
-  (`%_gpg_name` + `gpg --detach-sign --local-user`) and (2) the `secureblue.gpg`
-  bytes (`sha256 40d8ad27…d555`), byte-identical at `repo.secureblue.dev` and
-  committed in `secureblue/secureblue`. See `KEY-PROVENANCE.md`.
-- Changing it is a manual edit + a new `KEY-PROVENANCE.md` row with >= 2
-  independent channels + a human name. No script adopts a new fingerprint. (F1)
+Signing key `26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41` -- the only place it is
+written. Confirmed via `secureblue/Trivalent` `build.yml` (`%_gpg_name` +
+`gpg --detach-sign`) and the `secureblue.gpg` bytes (`sha256 40d8ad27…d555`),
+byte-identical at `repo.secureblue.dev` and in `secureblue/secureblue`. Changing
+it is a manual edit + a `KEY-PROVENANCE.md` row with >= 2 independent channels
+and a human name; no script adopts a new fingerprint (F1).
 
 ## aarch64
 
-Not exposed until: x86_64 fully green, then `10-verify-supply-chain.sh` re-run
-with `aarch64` against the aarch64 RPM and **its own** release tag (secureblue
-alternates x86_64 / aarch64 tags). The fingerprint, `--source-uri` and
-`--builder-id` are shared (same reusable `build.yml` + generator `@v2.1.0`); the
-`--source-branch` / workflow-path pin and the Fedora glibc RPM (URL + hash) are
-per-arch. F5's strace run must be redone on real aarch64 hardware.
-
-## Relationship to upstream -- read this
-
-**This is not an upstream-supported way to run Trivalent.** secureblue builds and
-ships Trivalent for **Fedora Atomic (rpm-ostree) images only**, where it comes
-with a SELinux policy module, distro-level configuration, image-level provenance
-verification, and automatic security updates. Running the RPM on NixOS is a
-community re-pack, the same category as the AUR `trivalent-bin` and
-`quixaq/trivalent-nix` -- neither endorsed nor tested by secureblue. If you want
-Trivalent as upstream intends it, install a secureblue image.
-
-Not affiliated with secureblue, Trivalent, or quixaq.
+Not exposed until x86_64 is fully green, then `10-verify-supply-chain.sh` is
+re-run for `aarch64` against the aarch64 RPM and **its own** release tag
+(secureblue alternates tags). Shared: fingerprint, `--source-uri`,
+`--builder-id`. Per-arch: `--source-branch` / workflow path, the Fedora glibc RPM
+(URL + hash). F5's strace run must be redone on real aarch64 hardware.
 
 ## Compared to building from source (nixpkgs#531708)
 
-There is an open nixpkgs PR that builds Trivalent **from source** on top of
-nixpkgs' Chromium infrastructure. Different trade-off:
+An open nixpkgs PR builds Trivalent **from source** on nixpkgs' Chromium
+infrastructure. Different trade-off:
 
-| | from source (nixpkgs#531708) | this flake (repack the signed RPM) |
+| | from source (#531708) | this flake (repack the signed RPM) |
 |---|---|---|
-| GN hardening flags (`is_cfi`, `enable_reporting=false`, `google_api_key=""`, ...) | hand-mirrored out of `trivalent.spec` into `gnFlags` -- author notes the spec "isn't easily parsable"; drifts on every upstream change | inherited -- we ship secureblue's compiled output, nothing to mirror |
-| launcher hardening (`LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE` scrub, Intel CET `GLIBC_TUNABLES`, `crbug.com/376567` stdio, refuse-root) | re-implemented in a Nix `makeWrapper` wrapper | inherited -- `trivalent.sh` runs **unmodified** |
-| coupling to Chromium version | `broken = chromium.upstream-info.version != "<pinned>"` -- breaks at every nixpkgs Chromium bump until a human re-syncs the patch set | none -- the binary is self-contained |
+| GN hardening flags | hand-mirrored from `trivalent.spec` into `gnFlags`; drifts on every upstream change | inherited -- secureblue's compiled output, nothing to mirror |
+| launcher hardening (`LD_*` scrub, Intel CET, `crbug.com/376567` stdio, refuse-root) | re-implemented in a `makeWrapper` wrapper | inherited -- `trivalent.sh` runs unmodified |
+| Chromium-version coupling | `broken = chromium != "<pinned>"`; breaks each nixpkgs Chromium bump until a human re-syncs patches | none -- the binary is self-contained |
 | build cost | 48 h timeout, `big-parallel`, needs a cache | minutes, no cache |
-| trust | `fetchFromGitHub` hash | GPG rpm sig + signed repodata + SLSA/Sigstore, in the build graph |
-| cost of the choice | native Nix libs throughout | binary artifact (`sourceProvenance = binaryNativeCode`) + a pinned Fedora glibc (F4) |
+| trust | `fetchFromGitHub` hash | GPG sig + signed repodata + SLSA/Sigstore, in the build graph |
+| cost | native Nix libs throughout | binary artifact + a pinned Fedora glibc (F4) |
 
-Neither is "better"; this one optimises for *running exactly what secureblue
-signed*, cheaply, with the supply chain checked. The bwrap layer that PR drops,
-we keep (see below) only because it is free here.
+This one optimises for *running exactly what secureblue signed*, cheaply, with
+the supply chain checked.
 
-## Drift contract (nixpkgs bumps)
+## Drift (nixpkgs bumps)
 
 The package is a Fedora RPM patchelf'd against nixpkgs libs and FHS-wrapped, so
-nixpkgs movement can break it. It is built so every break is **loud, at build
-time, before deploy** -- never a silently broken browser:
-
-`installCheckPhase` (run by `nix build` and `checks.trivalent`, i.e. `nix flake
-check`) does four layers on the patched binary, cheapest first:
-
-1. interpreter exists; every direct `DT_NEEDED` resolves by name in the RPATH;
-2. **full transitive `ld.so --list` closure** -- any `not found` at any depth
-   fails (a runtime lib whose *own* deps drifted);
-3. **real load + relocation** (`trivalent --version` in the sandbox) -- catches
-   `version \`GLIBC_2.43' not found`, `undefined symbol`, ABI breaks that trace
-   mode cannot see;
-4. the vendor `trivalent.sh` still `exec bwrap`s (F5).
+nixpkgs movement can break it -- always **loud, at build time, before deploy**.
+`installCheckPhase` (`nix build` / `checks.trivalent`) does four layers on the
+patched binary: (1) interpreter + every direct `DT_NEEDED` resolves in RPATH;
+(2) full transitive `ld.so --list` closure, any `not found` fails; (3) real
+load + relocation (`trivalent --version`) -- catches `GLIBC_2.x not found`,
+`undefined symbol`; (4) the vendor `trivalent.sh` still `exec bwrap`s.
 
 | drift | caught by |
 |---|---|
-| a `runtimeLibs` attr renamed/removed (`xorg.libX11` -> `libx11`, ...) | eval error |
-| a runtime lib bumps SONAME | layer 1 -> build fails |
-| a runtime lib's transitive dep drifts / goes missing | layer 2 -> build fails |
-| glibc / a lib becomes ABI-incompatible (`GLIBC_2.x not found`, `undefined symbol`) | layer 3 -> build fails (verified: `glibcStrategy = "nixpkgs"` now fails the build, not just at launch) |
-| nixpkgs glibc reaches the Fedora one | nothing breaks -- default `glibcStrategy = "fedora-rpm"` is glibc-version-independent (Fedora GA `glibc-2.43-2.fc44`, frozen tree) |
-| `buildFHSEnv` `-bwrap` rename | omen15 build fails, and/or the AppArmor attach glob stops matching -- `CHECK_APPARMOR=1 verify/30-sandbox-selfcheck.sh` |
-| upstream rewrites `trivalent.sh` | layer 4 -> build fails |
-| upstream drops/moves the `trivalent.sh` `LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE` scrub | `checks.launcher-scrub` -> `nix flake check` red; `verify/30` exit 55. (The `fhsLaunch` `env -u` wrapper still holds the guarantee -- the check just makes the regression visible.) |
-| `buildFHSEnv` stops honouring `extraBwrapArgs` | `checks.launcher-scrub` -> `WIRING FAIL: outer bwrap no longer masks /etc/ld.so.preload` |
-| GPU/GL regression from a mismatched mesa | runtime only -> `verify/30-sandbox-selfcheck.sh` + `chrome://gpu` |
+| a `runtimeLibs` attr renamed/removed | eval error |
+| a runtime lib bumps SONAME | layer 1 |
+| a transitive dep drifts / goes missing | layer 2 |
+| glibc / a lib ABI-incompatible | layer 3 (`glibcStrategy = "nixpkgs"` fails the build, not just at launch) |
+| nixpkgs glibc reaches the Fedora one | nothing breaks -- default `glibcStrategy = "fedora-rpm"` is version-independent (frozen `glibc-2.43-2.fc44`) |
+| upstream rewrites `trivalent.sh` | layer 4 |
+| upstream drops/moves the `LD_PRELOAD` scrub | `checks.launcher-scrub` red; `verify/30` exit 55 (the `env -u` wrapper still holds -- the check just surfaces it) |
+| `buildFHSEnv` `-bwrap` rename / stops honouring `extraBwrapArgs` | build fails / `checks.launcher-scrub` WIRING FAIL; AppArmor attach glob -- `CHECK_APPARMOR=1 verify/30-sandbox-selfcheck.sh` |
+| GPU/GL regression from mismatched mesa | runtime only -- `verify/30` + `chrome://gpu` |
 
-**After any nixpkgs bump that rebuilds Trivalent, run:**
-
-```
-nix build .#trivalent                                   # installCheckPhase
-verify/30-sandbox-selfcheck.sh https://example.org      # launch + sandbox + real page
-```
-
-Consumed with `inputs.nixpkgs.follows`, Trivalent rides the consumer's nixpkgs.
-A chezmoi-style `update-flake-lock.yml` that build-gates + auto-reverts already
-turns "drift broke Trivalent" into "PR stays closed, old lock kept" -- because
-the checks above make the break a *build* failure. Drop the `follows` and pin
-`trivalent-nix`'s own `nixpkgs` if you'd rather freeze it entirely (costs a 2nd
-nixpkgs in the closure and risks GL-driver ABI skew against the host).
+After any nixpkgs bump that rebuilds Trivalent: `nix build .#trivalent` +
+`verify/30-sandbox-selfcheck.sh https://example.org`.
 
 ## Kept vs degraded vs a secureblue install
 
-**Kept**
+**Kept** -- Chromium patchset + hardened compile flags (binary byte-for-byte,
+only ELF interpreter/RPATH patched); Intel CET tunables + `crbug.com/376567`
+stdio hardening (from `trivalent.sh` unmodified); `LD_PRELOAD`/`LD_AUDIT`/
+`LD_PROFILE`/`LD_LIBRARY_PATH` kept out of Chromium -- **owned** via the
+buildFHSEnv `env -u` `runScript` + `extraBwrapArgs` masking `/etc/ld.so.preload`,
+not merely inherited (`checks.launcher-scrub` + `verify/30` exit 55 catch a
+regression); vendor `bwrap --cap-drop ALL` jail; renderer sandbox (userns +
+seccomp-bpf + TSYNC + broker Yama, `chrome://sandbox`: "adequately sandboxed");
+HW-accelerated canvas/WebGL + HW video decode/encode; the 3-layer supply-chain
+check.
 
-- Trivalent's Chromium patchset + hardened compile flags -- binary shipped
-  byte-for-byte, only ELF interpreter/RPATH patched.
-- Intel CET tunables (`x86_ibt`, `x86_shstk`), `crbug.com/376567` stdio
-  hardening -- from `trivalent.sh` run unmodified, nothing re-implemented.
-- `LD_PRELOAD`/`LD_AUDIT`/`LD_PROFILE`/`LD_LIBRARY_PATH` kept out of Chromium
-  (so a system-wide `graphene-hardened-light` / hardened_malloc doesn't reach
-  it -- upstream's intent; PartitionAlloc conflicts). **Owned**, not merely
-  inherited: the buildFHSEnv `runScript` is an `env -u` wrapper and
-  `extraBwrapArgs` masks `/etc/ld.so.preload`, independent of whether
-  `trivalent.sh` keeps doing it. `checks.launcher-scrub` (behavioural, in
-  `nix flake check`) + `verify/30` exit 55 detect a regression in either.
-- Vendor `bwrap --cap-drop ALL` jail + `/etc/ld.so.preload` neutralised. Minor
-  layer -- secureblue call it "mostly hardened_malloc removal, not significant
-  security", and nixpkgs#531708 drops it; kept here because running the launcher
-  unmodified is free.
-- Renderer sandbox: namespace (user/PID/net) + seccomp-bpf + TSYNC + broker Yama
-  (`chrome://sandbox`: "adequately sandboxed"; strace parity in `F4-F5-RESULTS.md`).
-- HW-accelerated canvas/compositing/raster/WebGL + HW video decode/encode
-  (`chrome://gpu`).
-- Three-layer supply-chain verification of the RPM.
+**Degraded / absent** --
 
-**Degraded / absent**
-
-- `trivalent-selinux` -- no SELinux on NixOS. The AppArmor profile is the
-  stand-in (loaded automatically when `security.apparmor.enable = true`;
-  read-mostly, `$HOME` blind except the browser's own dirs + downloads, hard
-  denies on ssh/gpg/keyrings/history/credential stores). With AppArmor off or
-  the profile in complain mode, the browser process has no MAC confinement.
+- `trivalent-selinux`: no SELinux on NixOS. The AppArmor profile is the stand-in
+  (auto-loaded with `security.apparmor.enable`; read-mostly, `$HOME` blind
+  except the browser's own dirs + downloads, hard denies on
+  ssh/gpg/keyrings/history/credential stores). AppArmor off or `state =
+  "complain"` -> no MAC confinement.
 - GPU process not sandboxed (`chrome://gpu` -> `Sandboxed: false`) under the
-  FHS+bwrap wrap; the renderer and network sandboxes are unaffected.
+  FHS+bwrap wrap; renderer and network sandboxes unaffected.
 - Vulkan disabled (`/etc/trivalent/trivalent.conf` not read) -- GL/ANGLE-GLES.
-- No automatic updates -- `pins.nix` bumped by hand.
-- Yama non-broker ptrace protection depends on the host `kernel.yama.ptrace_scope`
-  (secureblue uses `3`).
+- Yama non-broker ptrace protection depends on the host
+  `kernel.yama.ptrace_scope` (secureblue uses `3`).
