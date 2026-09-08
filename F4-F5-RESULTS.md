@@ -99,18 +99,21 @@ Fedora aarch64 glibc satisfies its `GLIBC_2.43` needs, same as x86_64.
 `glibcStrategy = "fedora-rpm"` is correct for both arches. (A qemu-user
 pre-check on omen15 agreed.)
 
-**F5 -- renders a real page on aarch64** (2026-09-08, same version, on real
-aarch64 hardware):
+**F5 -- confirmed on aarch64** (2026-09-08). `verify/30-sandbox-selfcheck.sh
+https://example.org` in the `ci-aarch64` job on a native `ubuntu-24.04-arm`
+runner (after `sysctl kernel.apparmor_restrict_unprivileged_userns=0` -- Ubuntu
+24.04 blocks unprivileged userns for unconfined binaries):
 
-```
-nix run github:hydroakri/trivalent-nix#trivalent -- --headless=new --disable-gpu \
-  --virtual-time-budget=15000 --timeout=60000 --dump-dom https://example.org
--> full <!DOCTYPE html> ... <h1>Example Domain</h1> ... </html>
-```
+| | wrapped | unwrapped |
+|---|---|---|
+| `CLONE_NEWUSER` / `NEWPID` / `NEWNET` | yes / yes / yes | yes / yes / yes |
+| seccomp-bpf filter | yes | yes |
+| `execve(.../chrome-sandbox)` / `setuid(0)` | none | none |
+| `--no-sandbox` / `--disable-setuid-sandbox` | none | none |
+| real page rendered | yes (`example.org`, 266 text chars, exit 0) | yes |
+| `LD_PRELOAD` sentinel reaches the browser | no (pre-exec helpers only) | -- |
 
-The FHS-wrapped browser launches, brings up the unprivileged user namespace, and
-dumps the correct DOM over the network. The strace sandbox-parity table (as for
-x86_64 above) is produced by `verify/30-sandbox-selfcheck.sh` -- an informational
-step in `ci-aarch64` (`continue-on-error`; its `--dump-dom` budgets were raised
-to 30 s virtual-time / 90 s timeout / 180 s wall-cap so a slow arm runner still
-renders).
+`RESULT: wrapped and unwrapped agree on sandbox call path
+[netns,pidns,seccomp-bpf,userns]` -- same as x86_64. A manual
+`nix run …#trivalent -- --headless=new --dump-dom https://example.org` on real
+aarch64 hardware also produced the full `Example Domain` DOM.

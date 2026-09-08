@@ -90,6 +90,9 @@ echo "[selfcheck] wrapped sandbox syscalls: [$W_CLASS]"
 W_TEXT="$(sed -e 's/<[^>]*>/ /g' -e 's/[[:space:]]\+/ /g' "$wd/dom-wrapped.html" | tr -d ' \n')"
 if [ "${#W_TEXT}" -lt 20 ]; then
   echo "FAIL: empty DOM from $REAL_URL" >&2
+  echo "--- last 25 lines of the browser's stderr ---" >&2
+  tail -n 25 "$wd/err-wrapped.log" >&2 || true
+  echo "--- (unpriv userns must work: kernel.apparmor_restrict_unprivileged_userns=0) ---" >&2
   exit 52
 fi
 echo "[selfcheck] rendered ${#W_TEXT} text chars from $REAL_URL"
