@@ -12,10 +12,11 @@ chain, offline, via cosign against a vendored trusted root) all check out.
 nix run github:hydroakri/trivalent-nix#trivalent
 ```
 
-**x86_64-linux only.** Unpack + FHS-wrap technique from
+**x86_64-linux and aarch64-linux** (the only two arches secureblue builds).
+Unpack + FHS-wrap technique from
 [`quixaq/trivalent-nix`](https://github.com/quixaq/trivalent-nix); its
 zero-verification trust baseline is not -- this is not a fork. Outputs:
-`packages.x86_64-linux.{trivalent,supply-chain}`, `nixosModules.default`.
+`packages.{x86_64,aarch64}-linux.{trivalent,supply-chain}`, `nixosModules.default`.
 
 ## Install (NixOS)
 
@@ -44,9 +45,9 @@ Niche knobs: `programs.trivalent.package` (override the package),
 globs the browser must never touch / may only read).
 
 **Without the module:** `environment.systemPackages = [
-inputs.trivalent-nix.packages.x86_64-linux.trivalent ];` or `nix profile install
-github:hydroakri/trivalent-nix#trivalent`. No binary cache is published -- a
-repack of a prebuilt RPM, ~2 min to build locally.
+inputs.trivalent-nix.packages.${pkgs.system}.trivalent ];` or `nix profile
+install github:hydroakri/trivalent-nix#trivalent`. No binary cache is published
+-- a repack of a prebuilt RPM, ~2 min to build locally.
 
 ## Caveats
 
@@ -72,7 +73,9 @@ quixaq.
 
 ## Status
 
-All green on x86_64-linux, all in `nix flake check` / CI:
+All green on **x86_64-linux and aarch64-linux**, all in `nix flake check` / CI
+(x86_64 on `ubuntu-latest` job `ci-x86_64`, aarch64 on `ubuntu-24.04-arm` job
+`ci-aarch64` -- both required):
 
 - **3-layer supply chain** (`checks.supply-chain`, offline, key `26B4…3E41`) --
   cosign against the vendored `verify/sigstore-trusted-root.json` (rotation:
@@ -80,10 +83,9 @@ All green on x86_64-linux, all in `nix flake check` / CI:
 - **nixpkgs-drift gate** (`checks.trivalent` -> `installCheckPhase`) and
   **`checks.launcher-scrub`** (the `LD_PRELOAD` scrub, behavioural) and
   **`verify/40-review.sh`** (independent review: fingerprint + trusted-root pins).
-- **F4** (binary needs `GLIBC_2.43` -> pinned Fedora glibc) and **F5** (sandbox
-  parity, no setuid helper) verified -- `F4-F5-RESULTS.md`.
-- **Unattended auto-update + drift CI** -- see [Automation](#automation).
-- `aarch64` not exposed yet (see below).
+- **F4** (binary needs `GLIBC_2.43` -> pinned Fedora glibc, per arch) and **F5**
+  (sandbox parity, no setuid helper) verified -- `F4-F5-RESULTS.md`.
+- **Unattended auto-update + drift CI** -- both arches, see [Automation](#automation).
 
 ## How the verification works
 
@@ -114,11 +116,12 @@ a real kernel). Exit codes are the judgement:
 ## Automation
 
 `nix run .#update` (`lib/update.nix`, a Nix-built `writeShellApplication`, also
-`packages.trivalent.passthru.updateScript`) is the whole update: preflight (key
-+ trusted-root pins, mismatch -> `HALT.txt` + exit 40/41, no writes) ->
-`20-version-map.sh` -> `10-verify-supply-chain.sh` (+ writes `verify/logs/<v-r>/`)
--> rewrite the `pins.nix` `x86_64` block -> `nix build .#supply-chain` re-verify
--> emit the `updateScript` JSON. Exit: `0` bump/no-op · `20` F3 · `22`
+`packages.trivalent.passthru.updateScript`) is the whole update: preflight once
+(key + trusted-root pins, mismatch -> `HALT.txt` + exit 40/41, no writes) -> for
+**each arch** `20-version-map.sh` -> `10-verify-supply-chain.sh` (+ writes
+`verify/logs/<v-r>/`) -> rewrite that arch's `pins.nix` block -> x86_64
+`.#supply-chain` re-verify (aarch64 gated by `ci-aarch64`) -> emit the
+`updateScript` JSON. Exit: `0` bump/no-op · `20` F3 · `22`
 unparseable · `30` F2 · `40/41` key/trusted-root HALT · `42` key rotation
 **PROPOSED** · `11/12/13` a layer failed.
 
@@ -128,7 +131,7 @@ checked against four independent channels (R2, the key in `secureblue/secureblue
 carries a verified certification over the new one from `keyserver.ubuntu.com` --
 unforgeable by an endpoint-only attacker). All four agreeing -> the updater
 rewrites the anchors and exits 42; the workflow opens a `needs-human-approval`
-PR that is **never auto-merged**, and `40-review.sh` R1 keeps `ci` red until a
+PR that is **never auto-merged**, and `40-review.sh` R1 keeps `ci-x86_64` red until a
 human confirms a further channel and signs the `KEY-PROVENANCE.md` row. Any
 channel missing -> exit 40, fully manual.
 
@@ -141,7 +144,7 @@ channel missing -> exit 40, fully manual.
 A wrong auto-pin -> `checks.supply-chain` / `installCheckPhase` red -> PR closed,
 `main` never advances. The two F1 decisions halt to an issue and are done by a
 human per `MAINTENANCE.md`. Repo prerequisites: secret `GH_TOKEN_FOR_UPDATES`,
-"Allow auto-merge" on, branch protection requiring `ci`.
+"Allow auto-merge" on, branch protection requiring `ci-x86_64` + `ci-aarch64`.
 
 **Bump by hand:** `nix run .#update` -> `./verify/40-review.sh` -> `nix flake
 check` -> `git add pins.nix verify/logs && git commit`.
@@ -157,11 +160,9 @@ and a human name; no script adopts a new fingerprint (F1).
 
 ## aarch64
 
-Not exposed until x86_64 is fully green, then `10-verify-supply-chain.sh` is
-re-run for `aarch64` against the aarch64 RPM and **its own** release tag
-(secureblue alternates tags). Shared: fingerprint, `--source-uri`,
-`--builder-id`. Per-arch: `--source-branch` / workflow path, the Fedora glibc RPM
-(URL + hash). F5's strace run must be redone on real aarch64 hardware.
+First-class -- same 3-layer verification, gated on a native `ubuntu-24.04-arm`
+CI job (`ci-aarch64`, required); the updater bumps both arches. Release-tag-pair
+and per-arch mechanics: `MAINTENANCE.md`.
 
 ## Compared to building from source (nixpkgs#531708)
 

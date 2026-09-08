@@ -371,7 +371,7 @@ buildFHSEnv {
       asl20
     ];
     mainProgram = "trivalent";
-    platforms = [ "x86_64-linux" ];
+    platforms = [ "${arch}-linux" ];
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
 }

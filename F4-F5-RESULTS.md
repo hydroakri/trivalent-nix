@@ -79,3 +79,22 @@ it.
 **Decision: `buildFHSEnv` running the unmodified vendor launcher is acceptable.**
 The wrapper does not weaken the sandbox. `verify/30-sandbox-selfcheck.sh` is the
 standing runtime gate for this and must pass after every version bump.
+
+---
+
+## aarch64
+
+Same `pins.nix` / `lib/verify.nix` flow, `glibcStrategy = "fedora-rpm"` default
+(`lib/mk-glibc-rpm.nix` carries the Fedora 44 `glibc-2.43-2.fc44.aarch64.rpm`).
+
+- **F4, pre-checked under qemu-user on omen15** (2026-09-08, Trivalent
+  `152.0.7977.82-447136`): `nix build .#packages.aarch64-linux.trivalent` ->
+  `installCheck OK`, the aarch64 binary `loaded + relocated + ran: Trivalent
+  152.0.7977.82` -- so the Fedora aarch64 glibc satisfies its `GLIBC_2.43`
+  needs, same as x86_64. qemu-user flakiness means this is a pre-check, not the
+  authority.
+- **Authoritative aarch64 signal: the `ci-aarch64` job** on a real
+  `ubuntu-24.04-arm` runner -- `nix flake check` + `nix build .#trivalent
+  .#supply-chain` + `verify/40-review.sh` (all required), plus **F5**
+  (`verify/30-sandbox-selfcheck.sh`) as an informational step. Fill this section
+  with the first native run's strace parity table.

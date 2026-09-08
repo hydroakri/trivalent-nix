@@ -1,15 +1,15 @@
 name: update-trivalent
 
-# Unattended: detect a new Trivalent release -> verify it (3 layers, live) ->
-# rewrite pins.nix -> PR -> nix flake check gates -> auto-merge on green.
-# F1 events (key / Sigstore trusted-root change) HALT to a GitHub issue and
-# never touch pins.nix. No binary cache -- the package is a repack of a
-# prebuilt RPM, so consumers build it locally in minutes.
+# Unattended: for BOTH arches (x86_64 + aarch64) detect a new Trivalent release
+# -> verify it (3 layers, live) -> rewrite that arch's pins.nix block -> PR ->
+# `ci-x86_64` + `ci-aarch64` gate -> auto-merge on green. F1 events (key / Sigstore
+# trusted-root change) HALT to a GitHub issue and never touch pins.nix. No
+# binary cache -- the package is a repack of a prebuilt RPM.
 #
 # Repo prerequisites (see MAINTENANCE.md "Repository setup"):
 #   - secret GH_TOKEN_FOR_UPDATES (PAT: contents:write + pull-requests:write)
 #   - Settings > General > "Allow auto-merge" enabled
-#   - branch-protection rule on main requiring the `ci` status check
+#   - branch-protection on main requiring BOTH `ci-x86_64` and `ci-aarch64`
 #   - labels: automated, dependencies, blocked, security, needs-human-approval
 
 on:

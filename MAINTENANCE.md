@@ -20,7 +20,7 @@ can't merge.
 
 ### 1. `GH_TOKEN_FOR_UPDATES` secret
 
-The default `GITHUB_TOKEN` can't trigger `ci` on a bot-pushed branch (pushes
+The default `GITHUB_TOKEN` can't trigger `ci-x86_64` / `ci-aarch64` on a bot-pushed branch (pushes
 from `GITHUB_TOKEN` don't start `workflow` runs), so auto-merge would wait
 forever. Use a personal access token:
 
@@ -43,18 +43,19 @@ green; the key-rotation job never merges.
 
 **Settings -> Branches -> Add branch ruleset** (or classic rule) for `main`:
 
-- **Require status checks to pass** -> add **`ci`** (the job in `ci.yml`; it
-  appears in the list after the first PR runs it once).
+- **Require status checks to pass** -> add both **`ci-x86_64`** and **`ci-aarch64`**
+  (the jobs in `ci.yml`; each appears in the list after the first PR runs it
+  once).
 - **Require a pull request before merging** (the bot always uses a PR anyway).
 - **Do NOT "Require approvals"** -- keep the approving-review count at **0**. The
   bot has nobody to approve its PR; a non-zero count makes
   `gh pr merge --squash` in `update-trivalent.yml` fail on every version bump,
-  which defeats unattended operation. The green `ci` check is the gate.
+  which defeats unattended operation. The green checks are the gate.
 - Leave `matrix-nixpkgs` **out** of the required set -- it is `continue-on-error`
   and only a drift signal.
 
 This is what makes auto-merge safe without a reviewer: a bad pin ->
-`checks.supply-chain` / `installCheckPhase` red -> `ci` red -> the `Wait for CI,
+`checks.supply-chain` / `installCheckPhase` red -> `ci-x86_64` / `ci-aarch64` red -> the `Wait for CI,
 merge or roll back` step closes the PR, `main` never moves. The one path that
 *does* need a human -- a signing-key / trusted-root change -- never auto-merges
 (label `needs-human-approval`, and `40-review.sh` R1 stays red until a person
@@ -139,16 +140,25 @@ the hash check exists precisely to stop that.
 ## Per-release update
 
 Unattended via `.github/workflows/update-trivalent.yml` (daily -> `nix run
-.#update` -> `nix flake check` -> auto-merge on green). By hand:
+.#update` -> `ci-x86_64` + `ci-aarch64` -> auto-merge on green). `nix run .#update`
+loops **both arches** (x86_64 + aarch64), each on its own release tag -- the
+aarch64 tag is the *higher* `-<release>` of the same-day pair. By hand:
 
 ```sh
-nix run .#update            # preflight -> discover -> verify (live) -> rewrite
-                            # pins.nix + verify/logs/<v-r>/ -> nix build
-                            # .#supply-chain -> print the updateScript JSON
+nix run .#update            # per arch: preflight -> discover -> verify (live) ->
+                            # rewrite that arch's pins.nix block + verify/logs/<v-r>/
+                            # -> re-verify .#packages.x86_64-linux.supply-chain
+                            # -> print the updateScript JSON
 ./verify/40-review.sh       # -> REVIEW: PASS
-nix flake check
+nix flake check             # x86_64; add --all-systems (slow, needs an aarch64
+                            # builder or qemu-binfmt) to also check aarch64
 git add pins.nix verify/logs && git commit
 ```
+
+To bump only aarch64 by hand on an x86_64 box (it does not run the RPM, so no
+aarch64 builder needed):
+`./verify/10-verify-supply-chain.sh <aarch64-v-r> aarch64` -> paste its block
+into `pins.nix` `aarch64 = { … }` -> commit `pins.nix` + `verify/logs/<v-r>/`.
 
 `nix run .#update` HALTs (writes `HALT.txt`, exits 20/22/30/40/41, touches
 nothing) on F1/F2/F3 -- key change, trusted-root mismatch, provenance format
@@ -185,7 +195,7 @@ an endpoint-only attacker can't forge this).
 - **You**: confirm the rotation via a channel not in A-D -- secureblue's
   announcement / Discord / release notes -- then on the PR branch edit the last
   `KEY-PROVENANCE.md` row, replacing `PROPOSED-BY-BOT -- confirm ...` with your
-  name and the channel you used. Push. `ci` goes green; merge.
+  name and the channel you used. Push. `ci-x86_64` goes green; merge.
 
 ### Fully manual (evidence incomplete -> exit 40)
 
