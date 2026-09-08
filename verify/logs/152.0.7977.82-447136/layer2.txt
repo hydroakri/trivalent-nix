@@ -1,0 +1,18 @@
+== layer 2: repodata detached signature ==
+-- gpg --verify repomd.xml.asc repomd.xml
+gpg: Signature made Fri 04 Sep 2026 06:47:46 PM UTC
+gpg:                using EDDSA key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+gpg: Good signature from "secureblueadmin <secureblueadmin@proton.me>" [unknown]
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 26B4 463E D8F3 13BC 7E3F  BDF9 D922 3AF0 F47B 3E41
+[GNUPG:] NEWSIG
+[GNUPG:] KEY_CONSIDERED 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41 0
+[GNUPG:] SIG_ID HJiNPDZ4DCkz9xr1bq9TBlsXxAk 2026-09-04 1788547666
+[GNUPG:] GOODSIG D9223AF0F47B3E41 secureblueadmin <secureblueadmin@proton.me>
+[GNUPG:] VALIDSIG 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41 2026-09-04 1788547666 0 4 0 22 10 00 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+VALIDSIG primary key: 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41  rc=0
+primary.xml sha256: expected 19c650b7601c2ade6155aef971212e927ce6be6547d9a90949690a8a1d738a37 got 19c650b7601c2ade6155aef971212e927ce6be6547d9a90949690a8a1d738a37
+repodata trivalent: 152.0.7977.82-447136  loc=Packages/trivalent-152.0.7977.82-447136.aarch64.rpm  sha256=6352c5094f6dca80ebba005ebfb08cfebff385623177f0bc55c31414500ac00a
+OK: layer 2 verified; repodata-blessed sha256 = 6352c5094f6dca80ebba005ebfb08cfebff385623177f0bc55c31414500ac00a

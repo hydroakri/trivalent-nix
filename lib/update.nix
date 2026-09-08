@@ -1,6 +1,12 @@
 # The Nix-built unattended updater. `nix run .#update` from a checkout:
-#   preflight (F1 halt gates) -> discover -> verify (live) -> rewrite pins.nix
-#   -> re-verify offline (nix build .#supply-chain) -> emit updateScript JSON.
+#   preflight (F1 halt gates, once) -> per arch [x86_64, aarch64]: discover ->
+#   verify (live) -> rewrite that arch's pins.nix block -> re-verify offline
+#   (x86_64; aarch64 gated by the ci-aarch64 job) -> emit updateScript JSON.
+#
+# The two arches ship on SEPARATE, alternating release tags (e.g. x86_64
+# -447128, aarch64 -447136); each is discovered independently by
+# verify/20-version-map.sh. A HALT on either arch aborts the whole run and
+# leaves pins.nix untouched.
 #
 # It reads pins.nix / verify/fingerprint.env from the WORKING DIRECTORY at run
 # time (never a build-time snapshot), orchestrates the existing verify/ scripts
@@ -75,9 +81,15 @@ writeShellApplication {
   text = ''
     set -euo pipefail
     NIXFLAGS=(--extra-experimental-features "nix-command flakes")
-    ARCH="x86_64"
+    ARCHES=(x86_64 aarch64)
 
-    halt() { echo "$*" >./HALT.txt; echo "HALT: $*" >&2; }
+    halt() {
+      # if we already rewrote pins.nix for an earlier arch, undo it -- a HALT
+      # must touch nothing.
+      git checkout -- pins.nix verify/logs 2>/dev/null || true
+      echo "$*" >./HALT.txt
+      echo "HALT: $*" >&2
+    }
     say() { echo "[update] $*" >&2; }
 
     [ -f flake.nix ] && [ -f pins.nix ] && [ -x verify/20-version-map.sh ] ||
@@ -93,7 +105,6 @@ writeShellApplication {
     KEY_URL="$(jq -r .keyUrl <<<"$PJ")"
     KEY_HASH_PINNED="$(jq -r .keyHash <<<"$PJ")"
     TR_SHA256_PINNED="$(jq -r .sigstoreTrustedRootSha256 <<<"$PJ")"
-    PINNED_VR="$(jq -r ".''${ARCH}.versionRelease" <<<"$PJ")"
     sri() { nix "''${NIXFLAGS[@]}" hash convert --hash-algo sha256 --to sri "$1"; }
 
     envv() { sed -n "s/.*$1:=\\([^}\"]*\\).*/\\1/p" verify/fingerprint.env; }
@@ -169,124 +180,146 @@ writeShellApplication {
     fi
     say "preflight OK (key $FPR)"
 
-    # ---- discover ----------------------------------------------------------
-    say "discover: repodata vs GitHub"
-    set +e
-    vm_out="$(VMAP_RETRIES=0 ./verify/20-version-map.sh "$ARCH" 2>&1)"
-    vm_rc=$?
-    set -e
-    sed 's/^/  20> /' <<<"$vm_out" >&2
-    case "$vm_rc" in
-      0) ;;
-      10 | 21)
-        say "repodata behind GitHub (benign lag) -- nothing to do this run"
-        exit 0
-        ;;
-      20)
-        halt "F3: repodata advertises a release GitHub never published for $ARCH."
-        exit 20
-        ;;
-      22)
-        halt "version map unparseable (see 20> output above)."
-        exit 22
-        ;;
-      *)
-        halt "20-version-map.sh exited $vm_rc unexpectedly."
-        exit "$vm_rc"
-        ;;
-    esac
-    CAND="$(sed -n 's/^VERSION=//p' <<<"$vm_out" | tail -n1)"
-    [ -n "$CAND" ] || {
-      halt "20-version-map.sh exited 0 without a VERSION= line."
-      exit 22
-    }
-    if [ "$CAND" = "$PINNED_VR" ]; then
-      say "no-op: pinned == latest ($CAND)"
-      exit 0
-    fi
-    say "candidate: $PINNED_VR -> $CAND"
+    # ---- per-arch: discover -> verify (live) -> rewrite that arch's block --
+    # Each arch has its OWN release tag (x86_64 and aarch64 alternate, e.g.
+    # -447128 vs -447136), discovered independently by 20-version-map.sh.
+    declare -A OLD NEW
+    BUMPED=()
+    LOGFILES=(pins.nix)
 
-    # ---- verify (live: 3 layers + slsa-verifier Sigstore/Rekor) -----------
-    say "verify: 3 layers incl. live slsa-verifier"
-    set +e
-    v_out="$(./verify/10-verify-supply-chain.sh "$CAND" "$ARCH" 2>&1)"
-    v_rc=$?
-    set -e
-    sed 's/^/  10> /' <<<"$v_out" >&2
-    if [ "$v_rc" -ne 0 ]; then
-      case "$v_rc" in
-        30) halt "F2: SLSA provenance format changed for $CAND -- update lib/verify.nix + lib/anchors.nix." ;;
-        31) halt "SLSA provenance missing for $CAND." ;;
-        40) halt "F1 key mismatch during verify of $CAND." ;;
-        *) halt "supply-chain verification of $CAND failed (10-verify exit $v_rc)." ;;
+    for ARCH in "''${ARCHES[@]}"; do
+      PINNED_VR="$(jq -r ".''${ARCH}.versionRelease" <<<"$PJ")"
+      OLD[$ARCH]="$PINNED_VR"
+      NEW[$ARCH]="$PINNED_VR"
+      say "=== $ARCH (pinned $PINNED_VR) ==="
+
+      # discover
+      set +e
+      vm_out="$(VMAP_RETRIES=0 ./verify/20-version-map.sh "$ARCH" 2>&1)"
+      vm_rc=$?
+      set -e
+      sed "s/^/  20($ARCH)> /" <<<"$vm_out" >&2
+      case "$vm_rc" in
+        0) ;;
+        10 | 21)
+          say "$ARCH: repodata behind GitHub (benign lag) -- skipping this arch"
+          continue
+          ;;
+        20)
+          halt "F3: repodata advertises a release GitHub never published for $ARCH."
+          exit 20
+          ;;
+        22)
+          halt "version map unparseable for $ARCH (see 20($ARCH)> output above)."
+          exit 22
+          ;;
+        *)
+          halt "20-version-map.sh ($ARCH) exited $vm_rc unexpectedly."
+          exit "$vm_rc"
+          ;;
       esac
-      exit "$v_rc"
-    fi
+      CAND="$(sed -n 's/^VERSION=//p' <<<"$vm_out" | tail -n1)"
+      [ -n "$CAND" ] || {
+        halt "20-version-map.sh ($ARCH) exited 0 without a VERSION= line."
+        exit 22
+      }
+      NEW[$ARCH]="$CAND"
+      if [ "$CAND" = "$PINNED_VR" ]; then
+        say "$ARCH: no-op (pinned == latest $CAND)"
+        continue
+      fi
+      say "$ARCH: candidate $PINNED_VR -> $CAND"
 
-    # 10-verify wrote verify/logs/$CAND/ and printed  key = "value";  lines
-    # between the two "--- ... ---" markers.
-    blk="$(sed -n '/--- paste into pins.nix/,/--- keyHash/p' <<<"$v_out" | grep -E '^[[:space:]]+[a-zA-Z][a-zA-Z0-9]* = ".*";$')"
-    [ -n "$blk" ] || {
-      halt "could not parse the pins block from 10-verify output."
-      exit 12
-    }
-    fld() { sed -n "s/^[[:space:]]*$1 = \"\\(.*\\)\";\$/\\1/p" <<<"$blk"; }
+      # verify (live: 3 layers + slsa-verifier Sigstore/Rekor)
+      set +e
+      v_out="$(./verify/10-verify-supply-chain.sh "$CAND" "$ARCH" 2>&1)"
+      v_rc=$?
+      set -e
+      sed "s/^/  10($ARCH)> /" <<<"$v_out" >&2
+      if [ "$v_rc" -ne 0 ]; then
+        case "$v_rc" in
+          30) halt "F2: SLSA provenance format changed for $CAND ($ARCH) -- update lib/verify.nix + lib/anchors.nix." ;;
+          31) halt "SLSA provenance missing for $CAND ($ARCH)." ;;
+          40) halt "F1 key mismatch during verify of $CAND ($ARCH)." ;;
+          *) halt "supply-chain verification of $CAND ($ARCH) failed (10-verify exit $v_rc)." ;;
+        esac
+        exit "$v_rc"
+      fi
 
-    # ---- rewrite pins.nix (regen the x86_64 block, keep sentinels/comments) -
-    say "rewriting pins.nix"
-    {
-      printf '  x86_64 = {\n'
-      printf '    versionRelease = "%s"; # trivalent-x86_64-vr\n' "$CAND"
-      printf '    version = "%s"; # trivalent-x86_64-ver\n\n' "$(fld version)"
-      printf '    rpmUrl = "%s"; # trivalent-x86_64-url\n' "$(fld rpmUrl)"
-      printf '    rpmHash = "%s"; # trivalent-x86_64-hash\n' "$(fld rpmHash)"
-      printf '    rpmSha256 = "%s"; # trivalent-x86_64-sha256\n\n' "$(fld rpmSha256)"
-      printf '    # signed repo metadata (moves every publish)\n'
-      printf '    repomdUrl = "%s";\n' "$(fld repomdUrl)"
-      printf '    repomdHash = "%s";\n' "$(fld repomdHash)"
-      printf '    repomdAscUrl = "%s";\n' "$(fld repomdAscUrl)"
-      printf '    repomdAscHash = "%s";\n' "$(fld repomdAscHash)"
-      printf '    primaryUrl = "%s";\n' "$(fld primaryUrl)"
-      printf '    primaryHash = "%s";\n\n' "$(fld primaryHash)"
-      printf '    # SLSA provenance (immutable per release tag)\n'
-      printf '    intotoUrl = "%s";\n' "$(fld intotoUrl)"
-      printf '    intotoHash = "%s";\n\n' "$(fld intotoHash)"
-      printf '    # verified: %s  layers 1+2+3 = 0/0/0  key %s\n' "$(date -u +%Y-%m-%d)" "$FPR"
-      printf '  };\n'
-    } >"$tmp/block"
+      blk="$(sed -n '/--- paste into pins.nix/,/--- keyHash/p' <<<"$v_out" | grep -E '^[[:space:]]+[a-zA-Z][a-zA-Z0-9]* = ".*";$')"
+      [ -n "$blk" ] || {
+        halt "could not parse the pins block from 10-verify output ($ARCH)."
+        exit 12
+      }
+      fld() { sed -n "s/^[[:space:]]*$1 = \"\\(.*\\)\";\$/\\1/p" <<<"$blk"; }
 
-    awk -v bf="$tmp/block" '
-      $0 == "  x86_64 = {" { while ((getline l < bf) > 0) print l; close(bf); skip=1; next }
-      skip && $0 == "  };"  { skip=0; next }
-      !skip
-    ' pins.nix >"$tmp/pins.new"
-    mv "$tmp/pins.new" pins.nix
-    nixfmt pins.nix
+      # rewrite this arch's block in place (keep sentinels + comment layout)
+      say "$ARCH: rewriting pins.nix block"
+      {
+        printf '  %s = {\n' "$ARCH"
+        printf '    versionRelease = "%s"; # trivalent-%s-vr\n' "$CAND" "$ARCH"
+        printf '    version = "%s"; # trivalent-%s-ver\n\n' "$(fld version)" "$ARCH"
+        printf '    rpmUrl = "%s"; # trivalent-%s-url\n' "$(fld rpmUrl)" "$ARCH"
+        printf '    rpmHash = "%s"; # trivalent-%s-hash\n' "$(fld rpmHash)" "$ARCH"
+        printf '    rpmSha256 = "%s"; # trivalent-%s-sha256\n\n' "$(fld rpmSha256)" "$ARCH"
+        printf '    # signed repo metadata (moves every publish)\n'
+        printf '    repomdUrl = "%s";\n' "$(fld repomdUrl)"
+        printf '    repomdHash = "%s";\n' "$(fld repomdHash)"
+        printf '    repomdAscUrl = "%s";\n' "$(fld repomdAscUrl)"
+        printf '    repomdAscHash = "%s";\n' "$(fld repomdAscHash)"
+        printf '    primaryUrl = "%s";\n' "$(fld primaryUrl)"
+        printf '    primaryHash = "%s";\n\n' "$(fld primaryHash)"
+        printf '    # SLSA provenance (immutable per release tag)\n'
+        printf '    intotoUrl = "%s";\n' "$(fld intotoUrl)"
+        printf '    intotoHash = "%s";\n\n' "$(fld intotoHash)"
+        printf '    # verified: %s  layers 1+2+3 = 0/0/0  key %s\n' "$(date -u +%Y-%m-%d)" "$FPR"
+        printf '  };\n'
+      } >"$tmp/block-$ARCH"
 
+      awk -v bf="$tmp/block-$ARCH" -v want="  $ARCH = {" '
+        $0 == want { while ((getline l < bf) > 0) print l; close(bf); skip=1; next }
+        skip && $0 == "  };"  { skip=0; next }
+        !skip
+      ' pins.nix >"$tmp/pins.new"
+      mv "$tmp/pins.new" pins.nix
+      nixfmt pins.nix
+
+      while IFS= read -r f; do LOGFILES+=("$f"); done < <(find "verify/logs/$CAND" -maxdepth 1 -type f)
+      BUMPED+=("$ARCH")
+    done
+
+    # ---- overall outcome -------------------------------------------------
     if git diff --quiet -- pins.nix; then
-      say "pins.nix unchanged after rewrite -- no-op"
+      say "pins.nix unchanged -- no-op (both arches at latest, or benign lag)"
       git checkout -- verify/logs 2>/dev/null || true
       exit 0
     fi
 
-    # ---- re-verify offline in the build graph ----------------------------
-    say "re-verify offline: nix build .#supply-chain"
-    if ! nix "''${NIXFLAGS[@]}" build .#supply-chain --no-link -L; then
-      git checkout -- pins.nix
-      halt "nix build .#supply-chain failed against the freshly written pins -- reverted."
+    # ---- re-verify offline in the build graph ---------------------------
+    # `.#supply-chain` == packages.<this-host>.supply-chain == x86_64 on the
+    # updater runner. aarch64 is gated by the PR's `ci-aarch64` job (an
+    # aarch64 runner); the updater host has no aarch64 builder.
+    say "re-verify offline: nix build .#packages.x86_64-linux.supply-chain"
+    if ! nix "''${NIXFLAGS[@]}" build .#packages.x86_64-linux.supply-chain --no-link -L; then
+      git checkout -- pins.nix verify/logs
+      halt "offline re-verify (x86_64) failed against the freshly written pins -- reverted."
       exit 12
     fi
-    say "offline re-verify PASS"
+    say "offline re-verify PASS (x86_64; aarch64 gated by ci-aarch64)"
 
-    # ---- emit the passthru.updateScript JSON ----------------------------
-    mapfile -t logfiles < <(find "verify/logs/$CAND" -maxdepth 1 -type f)
+    # ---- emit the passthru.updateScript JSON --------------------------
+    parts=()
+    for a in "''${BUMPED[@]}"; do parts+=("$a ''${OLD[$a]} -> ''${NEW[$a]}"); done
+    MSG="trivalent: $(IFS=', '; echo "''${parts[*]}")"
+    # oldVersion/newVersion follow the nix-update convention (single string):
+    # the x86_64 pair (the primary arch; equal if x86_64 didn't move).
     jq -cn \
-      --arg old "$PINNED_VR" --arg new "$CAND" \
-      --argjson files "$(printf '%s\n' "pins.nix" "''${logfiles[@]}" | jq -R . | jq -s .)" \
-      --arg msg "trivalent: $PINNED_VR -> $CAND" \
-      --arg body "layers 1+2+3 PASS (live slsa-verifier + offline cosign) -- key $FPR" \
+      --arg old "''${OLD[x86_64]}" --arg new "''${NEW[x86_64]}" \
+      --argjson files "$(printf '%s\n' "''${LOGFILES[@]}" | jq -R . | jq -s 'unique')" \
+      --arg msg "$MSG" \
+      --arg body "per-arch: layers 1+2+3 PASS (live slsa-verifier + offline cosign) -- key $FPR. aarch64 build/sandbox gated by ci-aarch64." \
       '[{attrPath:"trivalent", oldVersion:$old, newVersion:$new, files:$files,
          commitMessage:$msg, commitBody:$body}]'
-    say "done: $PINNED_VR -> $CAND"
+    say "done: $MSG"
   '';
 }

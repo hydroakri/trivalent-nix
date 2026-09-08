@@ -14,7 +14,10 @@
       treefmt-nix,
     }:
     let
-      systems = [ "x86_64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       pins = import ./pins.nix;
@@ -123,6 +126,7 @@
         system:
         let
           pkgs = pkgsFor system;
+          arch = nixpkgs.lib.head (nixpkgs.lib.splitString "-" system);
           triv = self.packages.${system}.trivalent;
           # stands in for `bwrap`: records the argv + the LD_* it was handed,
           # then exits WITHOUT exec'ing. trivalent.sh line 24 hard-resets PATH
@@ -154,8 +158,8 @@
           supply-chain = self.packages.${system}.supply-chain;
           # cheap eval-only gate: the pinned SRI is well-formed and the log exists
           pin-log-present = pkgs.runCommand "pin-log-present" { } ''
-            test -f ${./verify/logs + "/${pins.x86_64.versionRelease}"}/summary.txt
-            grep -q "RESULT: PASS" ${./verify/logs + "/${pins.x86_64.versionRelease}"}/summary.txt
+            test -f ${./verify/logs + "/${pins.${arch}.versionRelease}"}/summary.txt
+            grep -q "RESULT: PASS" ${./verify/logs + "/${pins.${arch}.versionRelease}"}/summary.txt
             touch $out
           '';
 
