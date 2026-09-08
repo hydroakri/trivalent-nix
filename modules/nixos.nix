@@ -306,10 +306,18 @@ in
       }
 
       (lib.mkIf cfg.apparmor.enable {
+        # Turn the LSM on for them -- asking for the profile implies wanting
+        # AppArmor. mkDefault so an explicit `security.apparmor.enable = false`
+        # elsewhere still wins (and then the assertion below explains the clash).
+        security.apparmor.enable = lib.mkDefault true;
         assertions = [
           {
             assertion = config.security.apparmor.enable;
-            message = "programs.trivalent.apparmor.enable needs security.apparmor.enable = true.";
+            message = ''
+              programs.trivalent.apparmor.enable is set but security.apparmor.enable
+              resolved to false (something else forced it off). Either drop that
+              override or set programs.trivalent.apparmor.enable = false.
+            '';
           }
         ];
         security.apparmor.policies."trivalent".profile = profile;

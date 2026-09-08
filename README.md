@@ -38,8 +38,13 @@ programs.trivalent = {
 };
 ```
 
-`enable` installs the package (binary + `.desktop` + icons). Options:
-`package`, `apparmor.{enable,enforce,denyHomePaths,readableHomePaths}`.
+`enable` installs the package (binary + `.desktop` + icons). `apparmor.enable`
+turns on `security.apparmor.enable` for you (`mkDefault`); if you have forced it
+off elsewhere the build stops with an assertion. Options: `package`,
+`apparmor.{enable,enforce,denyHomePaths,readableHomePaths}`.
+
+The flake builds **x86_64-linux only** -- on another arch the build stops with
+"no Trivalent package is available for <system>" rather than installing nothing.
 
 Just the package, no module: `environment.systemPackages = [
 trivalent-nix.packages.x86_64-linux.trivalent ];` or `nix profile install
