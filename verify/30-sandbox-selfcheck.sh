@@ -49,9 +49,14 @@ run_traced() { # <tag> <cmd...>
   shift
   local prof="$wd/prof-$tag"
   mkdir -p "$prof"
-  strace -f -qq -s 200 -e "$SFILTER" -o "$wd/trace-$tag.log" \
+  # Generous budgets so a slow runner (e.g. GitHub-hosted arm) still renders the
+  # page: virtual-time 30 s + a 90 s Chromium --timeout, the whole launch capped
+  # at 180 s wall-clock (a full hang -> rc 124 -> caller treats it as exit 51,
+  # not a 6 h job).
+  timeout 180 \
+    strace -f -qq -s 200 -e "$SFILTER" -o "$wd/trace-$tag.log" \
     "$@" --headless=new --no-first-run --no-default-browser-check --disable-gpu \
-    --user-data-dir="$prof" --virtual-time-budget=8000 \
+    --user-data-dir="$prof" --virtual-time-budget=30000 --timeout=90000 \
     --dump-dom "$REAL_URL" >"$wd/dom-$tag.html" 2>"$wd/err-$tag.log"
   echo "  [$tag] exit=$? trace=$(wc -l <"$wd/trace-$tag.log") lines dom=$(wc -c <"$wd/dom-$tag.html") bytes"
 }
