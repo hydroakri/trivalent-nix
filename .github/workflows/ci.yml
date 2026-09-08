@@ -31,9 +31,21 @@ jobs:
       # independent review layer -- fingerprint drift (R1) + trusted-root pin (R4)
       - run: ./verify/40-review.sh
 
+      - name: F5 sandbox parity (informational)
+        continue-on-error: true
+        run: |
+          # ubuntu-24.04 restricts unprivileged user namespaces for unconfined
+          # binaries -- Chromium's namespace sandbox needs them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          nix build .#trivalent -o result --print-build-logs
+          TRIVALENT_BIN=./result/bin/trivalent ./verify/30-sandbox-selfcheck.sh https://example.org
+
   # aarch64 on a real GitHub-hosted arm runner (public repo -> free). REQUIRED,
   # same tier as `ci-x86_64`: `nix flake check` here checks aarch64-only (no
-  # --all-systems), so it's the aarch64 half of the merge gate.
+  # --all-systems), so it's the aarch64 half of the merge gate. Identical steps
+  # to `ci-x86_64` -- the F5 sandbox-parity self-check is the one that most needs
+  # a native arm runner (README "aarch64").
   ci-aarch64:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -49,15 +61,9 @@ jobs:
 
       - run: ./verify/40-review.sh
 
-      # F5 sandbox parity on real aarch64 (README "aarch64" says this must be
-      # redone here). Informational: a strace / headless-Chromium hiccup on the
-      # arm runner must not block merges -- the hard aarch64 gate is the three
-      # steps above.
       - name: F5 sandbox parity (informational)
         continue-on-error: true
         run: |
-          # ubuntu-24.04 restricts unprivileged user namespaces for unconfined
-          # binaries -- Chromium's namespace sandbox needs them.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           nix build .#trivalent -o result --print-build-logs
