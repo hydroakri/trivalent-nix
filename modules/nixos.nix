@@ -287,7 +287,23 @@ in
 
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
-      { environment.systemPackages = lib.mkIf (cfg.package != null) [ cfg.package ]; }
+      {
+        # Fail LOUDLY rather than silently installing nothing when there is no
+        # package for this host (the flake currently builds x86_64-linux only,
+        # so `self.packages.<system>.trivalent` is absent elsewhere -> null).
+        assertions = [
+          {
+            assertion = cfg.package != null;
+            message = ''
+              programs.trivalent.enable is set but no Trivalent package is
+              available for ${system}. trivalent-nix currently builds
+              x86_64-linux only. Set programs.trivalent.package explicitly, or
+              drop the module on this host.
+            '';
+          }
+        ];
+        environment.systemPackages = lib.optional (cfg.package != null) cfg.package;
+      }
 
       (lib.mkIf cfg.apparmor.enable {
         assertions = [
