@@ -49,9 +49,14 @@ run_traced() { # <tag> <cmd...>
   shift
   local prof="$wd/prof-$tag"
   mkdir -p "$prof"
-  strace -f -qq -s 200 -e "$SFILTER" -o "$wd/trace-$tag.log" \
+  # Generous budgets so a slow runner (e.g. GitHub-hosted arm) still renders the
+  # page: virtual-time 30 s + a 90 s Chromium --timeout, the whole launch capped
+  # at 180 s wall-clock (a full hang -> rc 124 -> caller treats it as exit 51,
+  # not a 6 h job).
+  timeout 180 \
+    strace -f -qq -s 200 -e "$SFILTER" -o "$wd/trace-$tag.log" \
     "$@" --headless=new --no-first-run --no-default-browser-check --disable-gpu \
-    --user-data-dir="$prof" --virtual-time-budget=8000 \
+    --user-data-dir="$prof" --virtual-time-budget=30000 --timeout=90000 \
     --dump-dom "$REAL_URL" >"$wd/dom-$tag.html" 2>"$wd/err-$tag.log"
   echo "  [$tag] exit=$? trace=$(wc -l <"$wd/trace-$tag.log") lines dom=$(wc -c <"$wd/dom-$tag.html") bytes"
 }
@@ -85,6 +90,9 @@ echo "[selfcheck] wrapped sandbox syscalls: [$W_CLASS]"
 W_TEXT="$(sed -e 's/<[^>]*>/ /g' -e 's/[[:space:]]\+/ /g' "$wd/dom-wrapped.html" | tr -d ' \n')"
 if [ "${#W_TEXT}" -lt 20 ]; then
   echo "FAIL: empty DOM from $REAL_URL" >&2
+  echo "--- last 25 lines of the browser's stderr ---" >&2
+  tail -n 25 "$wd/err-wrapped.log" >&2 || true
+  echo "--- (unpriv userns must work: kernel.apparmor_restrict_unprivileged_userns=0) ---" >&2
   exit 52
 fi
 echo "[selfcheck] rendered ${#W_TEXT} text chars from $REAL_URL"

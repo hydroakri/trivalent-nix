@@ -1,8 +1,12 @@
-# F4 / F5 -- local test results
+# F4 / F5 -- test results
 
 Both failure modes were resolved by running both branches on the target, not by
-assuming one. Host: **omen15** (x86_64, CachyOS kernel), 2026-09-07,
-Trivalent `152.0.7977.82-447128`, nixpkgs-unstable (`glibc 2.42`).
+assuming one.
+
+- **x86_64**: host **omen15** (CachyOS kernel), 2026-09-07, Trivalent
+  `152.0.7977.82-447128`, nixpkgs-unstable (`glibc 2.42`). Sections below.
+- **aarch64**: `ci-aarch64` on a native `ubuntu-24.04-arm` runner + a manual
+  hardware run, 2026-09-08, Trivalent `152.0.7977.82-447136`. See "[aarch64](#aarch64)".
 
 Re-run `verify/30-sandbox-selfcheck.sh` and the F4 build below whenever the
 Trivalent version bumps **and** its changelog touches the launcher / sandbox /
@@ -87,14 +91,29 @@ standing runtime gate for this and must pass after every version bump.
 Same `pins.nix` / `lib/verify.nix` flow, `glibcStrategy = "fedora-rpm"` default
 (`lib/mk-glibc-rpm.nix` carries the Fedora 44 `glibc-2.43-2.fc44.aarch64.rpm`).
 
-- **F4, pre-checked under qemu-user on omen15** (2026-09-08, Trivalent
-  `152.0.7977.82-447136`): `nix build .#packages.aarch64-linux.trivalent` ->
-  `installCheck OK`, the aarch64 binary `loaded + relocated + ran: Trivalent
-  152.0.7977.82` -- so the Fedora aarch64 glibc satisfies its `GLIBC_2.43`
-  needs, same as x86_64. qemu-user flakiness means this is a pre-check, not the
-  authority.
-- **Authoritative aarch64 signal: the `ci-aarch64` job** on a real
-  `ubuntu-24.04-arm` runner -- `nix flake check` + `nix build .#trivalent
-  .#supply-chain` + `verify/40-review.sh` (all required), plus **F5**
-  (`verify/30-sandbox-selfcheck.sh`) as an informational step. Fill this section
-  with the first native run's strace parity table.
+**F4 -- confirmed on real aarch64** (2026-09-08, Trivalent
+`152.0.7977.82-447136`). The `ci-aarch64` job on a native `ubuntu-24.04-arm`
+runner: `installCheckPhase` resolves the full 73-object transitive closure and
+the aarch64 binary `loaded + relocated + ran: Trivalent 152.0.7977.82` -- the
+Fedora aarch64 glibc satisfies its `GLIBC_2.43` needs, same as x86_64.
+`glibcStrategy = "fedora-rpm"` is correct for both arches. (A qemu-user
+pre-check on omen15 agreed.)
+
+**F5 -- confirmed on aarch64** (2026-09-08). `verify/30-sandbox-selfcheck.sh
+https://example.org` in the `ci-aarch64` job on a native `ubuntu-24.04-arm`
+runner (after `sysctl kernel.apparmor_restrict_unprivileged_userns=0` -- Ubuntu
+24.04 blocks unprivileged userns for unconfined binaries):
+
+| | wrapped | unwrapped |
+|---|---|---|
+| `CLONE_NEWUSER` / `NEWPID` / `NEWNET` | yes / yes / yes | yes / yes / yes |
+| seccomp-bpf filter | yes | yes |
+| `execve(.../chrome-sandbox)` / `setuid(0)` | none | none |
+| `--no-sandbox` / `--disable-setuid-sandbox` | none | none |
+| real page rendered | yes (`example.org`, 266 text chars, exit 0) | yes |
+| `LD_PRELOAD` sentinel reaches the browser | no (pre-exec helpers only) | -- |
+
+`RESULT: wrapped and unwrapped agree on sandbox call path
+[netns,pidns,seccomp-bpf,userns]` -- same as x86_64. A manual
+`nix run …#trivalent -- --headless=new --dump-dom https://example.org` on real
+aarch64 hardware also produced the full `Example Domain` DOM.

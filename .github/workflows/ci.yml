@@ -56,6 +56,10 @@ jobs:
       - name: F5 sandbox parity (informational)
         continue-on-error: true
         run: |
+          # ubuntu-24.04 restricts unprivileged user namespaces for unconfined
+          # binaries -- Chromium's namespace sandbox needs them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           nix build .#trivalent -o result --print-build-logs
           TRIVALENT_BIN=./result/bin/trivalent ./verify/30-sandbox-selfcheck.sh https://example.org
 
