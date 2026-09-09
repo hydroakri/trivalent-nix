@@ -31,19 +31,20 @@
     rpmHash = "sha256-bdMv+VmQ8JYUAE4+Y1I3kiTe2OOfe8Qlsnt1+bE/qn4="; # trivalent-x86_64-hash
     rpmSha256 = "6dd32ff95990f09614004e3e6352379224ded8e39f7bc425b27b75f9b13faa7e"; # trivalent-x86_64-sha256
 
-    # signed repo metadata (moves every publish)
+    # signed repo metadata -- moves on EVERY secureblue publish (any version),
+    # so these break whenever upstream ships. Re-pinned 2026-09-09 (mid-153).
     repomdUrl = "https://repo.secureblue.dev/repodata/repomd.xml";
-    repomdHash = "sha256-loI7y7zrMEO/4wlquRvW+HezA6fYzImZ4EEpYY0Iqds=";
+    repomdHash = "sha256-RsDjms0/IjH9z4/xLCgi0Hn612YIxzT6+ikQb3rqrpE=";
     repomdAscUrl = "https://repo.secureblue.dev/repodata/repomd.xml.asc";
-    repomdAscHash = "sha256-o5NEm9Y9lcXJvrFiyZExuZEFjDVlnWXKEC/OsOUDw5M=";
-    primaryUrl = "https://repo.secureblue.dev/repodata/19c650b7601c2ade6155aef971212e927ce6be6547d9a90949690a8a1d738a37-primary.xml.zst";
-    primaryHash = "sha256-GcZQt2AcKt5hVa75cSEuknzmvmVH2akJSWkKih1zijc=";
+    repomdAscHash = "sha256-jZoojktHNcslhgy/WSozCYrVq8Mfw4HPCkNfBwhjxhw=";
+    primaryUrl = "https://repo.secureblue.dev/repodata/a8fd0abb86f9217dd61df5d0b377cacced982dc2133172275bf0ee7453cf2d93-primary.xml.zst";
+    primaryHash = "sha256-qP0Ku4b5IX3WHfXQs3fKzO2YLcITMXInW/DudFPPLZM=";
 
     # SLSA provenance (immutable per release tag)
     intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/152.0.7977.82-447128/multiple.intoto.jsonl";
     intotoHash = "sha256-aGOZkIpcaxT6uikQGIhUOpTjAPyYCU7ISYQq20SZwe0=";
 
-    # verified: 2026-09-07  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-09-09  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 
   aarch64 = {
@@ -54,18 +55,19 @@
     rpmHash = "sha256-Y1LFCU9tyoDrugBev7CM/r/zhWIxd/C8VcMUFFAKwAo="; # trivalent-aarch64-hash
     rpmSha256 = "6352c5094f6dca80ebba005ebfb08cfebff385623177f0bc55c31414500ac00a"; # trivalent-aarch64-sha256
 
-    # signed repo metadata (moves every publish)
+    # signed repo metadata -- moves on EVERY secureblue publish (any version),
+    # so these break whenever upstream ships. Re-pinned 2026-09-09 (mid-153).
     repomdUrl = "https://repo.secureblue.dev/repodata/repomd.xml";
-    repomdHash = "sha256-loI7y7zrMEO/4wlquRvW+HezA6fYzImZ4EEpYY0Iqds=";
+    repomdHash = "sha256-RsDjms0/IjH9z4/xLCgi0Hn612YIxzT6+ikQb3rqrpE=";
     repomdAscUrl = "https://repo.secureblue.dev/repodata/repomd.xml.asc";
-    repomdAscHash = "sha256-o5NEm9Y9lcXJvrFiyZExuZEFjDVlnWXKEC/OsOUDw5M=";
-    primaryUrl = "https://repo.secureblue.dev/repodata/19c650b7601c2ade6155aef971212e927ce6be6547d9a90949690a8a1d738a37-primary.xml.zst";
-    primaryHash = "sha256-GcZQt2AcKt5hVa75cSEuknzmvmVH2akJSWkKih1zijc=";
+    repomdAscHash = "sha256-jZoojktHNcslhgy/WSozCYrVq8Mfw4HPCkNfBwhjxhw=";
+    primaryUrl = "https://repo.secureblue.dev/repodata/a8fd0abb86f9217dd61df5d0b377cacced982dc2133172275bf0ee7453cf2d93-primary.xml.zst";
+    primaryHash = "sha256-qP0Ku4b5IX3WHfXQs3fKzO2YLcITMXInW/DudFPPLZM=";
 
     # SLSA provenance (immutable per release tag)
     intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/152.0.7977.82-447136/multiple.intoto.jsonl";
     intotoHash = "sha256-vS+GMWUuLoY48UiV4P3YF1MXLgSP2+OGrpTRALHMAxE=";
 
-    # verified: 2026-09-08  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-09-09  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 }
