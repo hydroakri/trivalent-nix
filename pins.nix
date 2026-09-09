@@ -23,6 +23,12 @@
   # Sigstore announces a root change -- procedure in MAINTENANCE.md.
   sigstoreTrustedRootSha256 = "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66";
 
+  # The signed repo index (repomd.xml{,.asc}, primary.xml.zst) is likewise
+  # vendored -- in verify/repodata/ -- and GPG-verified in lib/verify.nix layer
+  # 2. It is NOT hash-pinned here: upstream rewrites repomd.xml on every publish,
+  # so a pin would break the build on every secureblue release. `nix run .#update`
+  # refreshes the snapshot alongside each bump.
+
   x86_64 = {
     versionRelease = "152.0.7977.82-447128"; # trivalent-x86_64-vr
     version = "152.0.7977.82"; # trivalent-x86_64-ver
@@ -31,19 +37,15 @@
     rpmHash = "sha256-bdMv+VmQ8JYUAE4+Y1I3kiTe2OOfe8Qlsnt1+bE/qn4="; # trivalent-x86_64-hash
     rpmSha256 = "6dd32ff95990f09614004e3e6352379224ded8e39f7bc425b27b75f9b13faa7e"; # trivalent-x86_64-sha256
 
-    # signed repo metadata (moves every publish)
-    repomdUrl = "https://repo.secureblue.dev/repodata/repomd.xml";
-    repomdHash = "sha256-loI7y7zrMEO/4wlquRvW+HezA6fYzImZ4EEpYY0Iqds=";
-    repomdAscUrl = "https://repo.secureblue.dev/repodata/repomd.xml.asc";
-    repomdAscHash = "sha256-o5NEm9Y9lcXJvrFiyZExuZEFjDVlnWXKEC/OsOUDw5M=";
-    primaryUrl = "https://repo.secureblue.dev/repodata/19c650b7601c2ade6155aef971212e927ce6be6547d9a90949690a8a1d738a37-primary.xml.zst";
-    primaryHash = "sha256-GcZQt2AcKt5hVa75cSEuknzmvmVH2akJSWkKih1zijc=";
+    # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored
+    # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not
+    # pinned here, because upstream rewrites repomd.xml on every publish.
 
     # SLSA provenance (immutable per release tag)
     intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/152.0.7977.82-447128/multiple.intoto.jsonl";
     intotoHash = "sha256-aGOZkIpcaxT6uikQGIhUOpTjAPyYCU7ISYQq20SZwe0=";
 
-    # verified: 2026-09-07  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-09-09  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 
   aarch64 = {
@@ -54,18 +56,14 @@
     rpmHash = "sha256-Y1LFCU9tyoDrugBev7CM/r/zhWIxd/C8VcMUFFAKwAo="; # trivalent-aarch64-hash
     rpmSha256 = "6352c5094f6dca80ebba005ebfb08cfebff385623177f0bc55c31414500ac00a"; # trivalent-aarch64-sha256
 
-    # signed repo metadata (moves every publish)
-    repomdUrl = "https://repo.secureblue.dev/repodata/repomd.xml";
-    repomdHash = "sha256-loI7y7zrMEO/4wlquRvW+HezA6fYzImZ4EEpYY0Iqds=";
-    repomdAscUrl = "https://repo.secureblue.dev/repodata/repomd.xml.asc";
-    repomdAscHash = "sha256-o5NEm9Y9lcXJvrFiyZExuZEFjDVlnWXKEC/OsOUDw5M=";
-    primaryUrl = "https://repo.secureblue.dev/repodata/19c650b7601c2ade6155aef971212e927ce6be6547d9a90949690a8a1d738a37-primary.xml.zst";
-    primaryHash = "sha256-GcZQt2AcKt5hVa75cSEuknzmvmVH2akJSWkKih1zijc=";
+    # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored
+    # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not
+    # pinned here, because upstream rewrites repomd.xml on every publish.
 
     # SLSA provenance (immutable per release tag)
     intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/152.0.7977.82-447136/multiple.intoto.jsonl";
     intotoHash = "sha256-vS+GMWUuLoY48UiV4P3YF1MXLgSP2+OGrpTRALHMAxE=";
 
-    # verified: 2026-09-08  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-09-09  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 }

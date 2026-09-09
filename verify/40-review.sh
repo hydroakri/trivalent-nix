@@ -60,19 +60,30 @@ fi
 # ---- R2: version-map coverage ----------------------------------------------
 echo "== R2: version-map branch coverage =="
 vm="$V/20-version-map.sh"
+up="lib/update.nix"
 grep -q 'exit 20' "$vm" && grep -q 'ahead of the newest listed' "$vm" &&
-  good "reverse-inconsistency branch (repodata ahead / tag absent -> 20) present" ||
-  bad "reverse-inconsistency branch missing or altered"
+  good "tampering branch (repodata ahead of an EXISTING release -> 20) present" ||
+  bad "tampering branch missing or altered"
 grep -q 'older "$A" "$B"' "$vm" && grep -q 'exit 21' "$vm" &&
   good "delay branch (repodata behind -> retry -> 21) present" ||
   bad "delay branch missing or altered"
 grep -Eq 'exit 22' "$vm" &&
   good "unparseable branch (-> 22) present" ||
   bad "unparseable branch missing"
-# the two disagreement directions must be DIFFERENT exit codes
-grep -q 'exit 20' "$vm" && grep -q 'exit 21' "$vm" &&
-  good "delay (21) and tampering (20) are distinct codes" ||
-  bad "delay and tampering not distinguished"
+# the disagreement directions must be DISTINCT exit codes
+grep -q 'exit 20' "$vm" && grep -q 'exit 21' "$vm" && grep -q 'exit 23' "$vm" &&
+  good "delay (21) / tampering (20) / release-in-flight (23) are distinct codes" ||
+  bad "delay / tampering / in-flight not all distinguished"
+# the "no GitHub release yet" (23) path must hand the caller the SIGNED
+# repodata's timestamp, and the caller must NOT halt inside the grace window:
+# it re-verifies (layers 1+2 genuine, layer 3 only "missing") and escalates
+# only once REPOMD_REVISION is older than GRACE_HOURS.
+grep -q 'REPOMD_REVISION=' "$vm" &&
+  good "23 branch emits REPOMD_REVISION= for the grace clock" ||
+  bad "23 branch does not emit REPOMD_REVISION="
+grep -q 'GRACE_HOURS' "$up" && grep -qE '"\$v_rc" -eq 31 .* "\$l12_ok" -eq 1' "$up" &&
+  good "update.nix: 23 -> grace on a signed RPM with only layer 3 missing" ||
+  bad "update.nix: 23 handling missing or does not gate on layers 1+2 + rc 31"
 
 # ---- R3: pass-criterion validity ----------------------------------------
 echo "== R3: 10-verify pass criterion =="
@@ -123,6 +134,32 @@ if [ -d .git ]; then
     done
   fi
 fi
+
+# ---- R5: repo-index snapshot is vendored, not a mutable FOD -------------
+echo "== R5: vendored repodata snapshot =="
+rd="repodata"
+if [ -s "$V/$rd/repomd.xml" ] && [ -s "$V/$rd/repomd.xml.asc" ] && [ -s "$V/$rd/primary.xml.zst" ]; then
+  good "verify/$rd/{repomd.xml,repomd.xml.asc,primary.xml.zst} present"
+else
+  bad "verify/$rd/ snapshot incomplete -- lib/verify.nix layer 2 has nothing to verify"
+fi
+if grep -q 'verify/repodata/repomd.xml' lib/verify.nix; then
+  good "lib/verify.nix reads the repo index from the vendored snapshot"
+else
+  bad "lib/verify.nix no longer points at verify/repodata/ -- did it revert to fetchurl?"
+fi
+if grep -qE '^\s*(repomdUrl|repomdHash|repomdAscUrl|repomdAscHash|primaryUrl|primaryHash)\b' pins.nix; then
+  bad "pins.nix still pins a mutable repo-index FOD -- it will go stale on the next upstream publish"
+else
+  good "pins.nix pins no mutable repo-index FODs"
+fi
+# the snapshot's detached signature must actually verify repomd.xml against the
+# pinned key (grep can't do this; `nix build .#supply-chain` does -- assert the
+# checker still wires the .asc through gpg --verify)
+{ grep -qF -- '--verify ${repomdAsc} ${repomd}' lib/verify.nix &&
+  grep -qE '^\s*gpg .*--verify \$\{repomdAsc\}' lib/verify.nix; } &&
+  good "layer 2 still GPG-verifies the vendored repomd.xml against repomd.xml.asc" ||
+  bad "layer 2 no longer runs gpg --verify over the vendored snapshot"
 
 echo
 [ "$fail" -eq 0 ] && echo "REVIEW: PASS" || echo "REVIEW: FAIL"

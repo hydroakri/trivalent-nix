@@ -15,8 +15,12 @@
 # nothing moved.
 #
 # Exit codes (the CI switches on these):
-#   0   ok, pins.nix rewritten  OR  no-op (nothing to do)
-#   20  HALT: repodata advertises a release GitHub never published (F3)
+#   0   ok, pins.nix rewritten  OR  no-op (nothing to do -- incl. an arch whose
+#       newest RPM is signed + in the repo but whose GitHub release / SLSA
+#       provenance is not published yet, within the GRACE_HOURS window)
+#   20  HALT: repodata advertises a release GitHub never published, and it is
+#       NOT a clean in-flight build -- wrong-arch provenance / repodata ahead of
+#       an existing release / no provenance past the grace window (F3)
 #   22  HALT: version map unparseable
 #   30  HALT: SLSA provenance format changed (F2)
 #   40  HALT: signing key changed, evidence incomplete -- fully manual (F1)
@@ -82,11 +86,17 @@ writeShellApplication {
     set -euo pipefail
     NIXFLAGS=(--extra-experimental-features "nix-command flakes")
     ARCHES=(x86_64 aarch64)
+    # "release in flight" grace: secureblue pushes the RPM to repo.secureblue.dev
+    # before cutting the GitHub release that carries the SLSA provenance. A
+    # genuinely-signed RPM whose provenance simply is not published yet is not
+    # tampering -- wait this many hours (measured from the SIGNED repodata's own
+    # revision timestamp) before escalating to an F3 issue.
+    GRACE_HOURS="''${TRIVALENT_INFLIGHT_GRACE_HOURS:-48}"
 
     halt() {
       # if we already rewrote pins.nix for an earlier arch, undo it -- a HALT
       # must touch nothing.
-      git checkout -- pins.nix verify/logs 2>/dev/null || true
+      git checkout -- pins.nix verify/logs verify/repodata 2>/dev/null || true
       echo "$*" >./HALT.txt
       echo "HALT: $*" >&2
     }
@@ -213,6 +223,41 @@ writeShellApplication {
           halt "version map unparseable for $ARCH (see 20($ARCH)> output above)."
           exit 22
           ;;
+        23)
+          # repodata names a version with no GitHub release yet. Genuine
+          # "in flight" (RPM signed, provenance just not published) or tampering?
+          C="$(sed -n 's/^VERSION=//p' <<<"$vm_out" | tail -n1)"
+          REV="$(sed -n 's/^REPOMD_REVISION=//p' <<<"$vm_out" | tail -n1)"
+          if [ "$C" = "$PINNED_VR" ]; then
+            say "$ARCH: no-op (pinned == latest $C; its GitHub release is gone/absent but we already verified it)"
+            continue
+          fi
+          set +e
+          v_out="$(./verify/10-verify-supply-chain.sh "$C" "$ARCH" 2>&1)"
+          v_rc=$?
+          set -e
+          sed "s/^/  10($ARCH)> /" <<<"$v_out" >&2
+          sm="verify/logs/$C/summary.txt"
+          l12_ok=1
+          { grep -qE '^layer 1 .*exit: 0$' "$sm" && grep -qE '^layer 2 .*exit: 0$' "$sm"; } || l12_ok=0
+          rm -rf "verify/logs/$C" # not pinning $C -- drop the log dir 10-verify wrote
+          if [ "$v_rc" -eq 31 ] && [ "$l12_ok" -eq 1 ] && [[ "$REV" =~ ^[0-9]+$ ]] && [ "$REV" -gt 0 ]; then
+            age_h=$(( ( $(date -u +%s) - REV ) / 3600 ))
+            if [ "$age_h" -lt "$GRACE_HOURS" ]; then
+              say "$ARCH: $C RPM is signed + in the repo, its GitHub release/provenance is not published yet (repodata is ''${age_h}h old, grace ''${GRACE_HOURS}h) -- skipping this arch this run"
+              continue
+            fi
+            halt "F3: $C ($ARCH) has been on repo.secureblue.dev for ''${age_h}h (> ''${GRACE_HOURS}h) with no GitHub release / SLSA provenance. The RPM is signed by $FPR and the repodata attests it, so this is not endpoint tampering -- but it is long overdue. Check secureblue's release status."
+            exit 20
+          fi
+          # not the benign shape: layer 1/2 failed, or provenance format changed
+          # (rc 30), or the timestamp is unreadable -> treat as real.
+          case "$v_rc" in
+            30) halt "F2: SLSA provenance format changed for $C ($ARCH) -- update lib/verify.nix + lib/anchors.nix." ;;
+            *)  halt "F3: repodata advertises $C ($ARCH) with no GitHub release, and it does NOT look like a clean in-flight build (10-verify exit $v_rc, layers 1+2 ok=$l12_ok, repodata revision='$REV'). Investigate." ;;
+          esac
+          [ "$v_rc" = 30 ] && exit 30 || exit 20
+          ;;
         *)
           halt "20-version-map.sh ($ARCH) exited $vm_rc unexpectedly."
           exit "$vm_rc"
@@ -262,13 +307,9 @@ writeShellApplication {
         printf '    rpmUrl = "%s"; # trivalent-%s-url\n' "$(fld rpmUrl)" "$ARCH"
         printf '    rpmHash = "%s"; # trivalent-%s-hash\n' "$(fld rpmHash)" "$ARCH"
         printf '    rpmSha256 = "%s"; # trivalent-%s-sha256\n\n' "$(fld rpmSha256)" "$ARCH"
-        printf '    # signed repo metadata (moves every publish)\n'
-        printf '    repomdUrl = "%s";\n' "$(fld repomdUrl)"
-        printf '    repomdHash = "%s";\n' "$(fld repomdHash)"
-        printf '    repomdAscUrl = "%s";\n' "$(fld repomdAscUrl)"
-        printf '    repomdAscHash = "%s";\n' "$(fld repomdAscHash)"
-        printf '    primaryUrl = "%s";\n' "$(fld primaryUrl)"
-        printf '    primaryHash = "%s";\n\n' "$(fld primaryHash)"
+        printf '    # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored\n'
+        printf '    # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not\n'
+        printf '    # pinned here, because upstream rewrites repomd.xml on every publish.\n\n'
         printf '    # SLSA provenance (immutable per release tag)\n'
         printf '    intotoUrl = "%s";\n' "$(fld intotoUrl)"
         printf '    intotoHash = "%s";\n\n' "$(fld intotoHash)"
@@ -290,10 +331,19 @@ writeShellApplication {
 
     # ---- overall outcome -------------------------------------------------
     if git diff --quiet -- pins.nix; then
+      # no version moved -- drop everything 10-verify wrote, including any
+      # verify/repodata/ refresh (an index-only upstream republish is not a
+      # reason to churn a PR; the committed snapshot still GPG-verifies and
+      # still attests the current pins).
       say "pins.nix unchanged -- no-op (both arches at latest, or benign lag)"
-      git checkout -- verify/logs 2>/dev/null || true
+      git checkout -- verify/logs verify/repodata 2>/dev/null || true
       exit 0
     fi
+
+    # a version moved -> 10-verify has refreshed verify/repodata/ to the snapshot
+    # it just GPG-verified; carry it into the commit (shared across arches --
+    # primary.xml lists every pinned arch, so one snapshot attests them all).
+    while IFS= read -r f; do LOGFILES+=("$f"); done < <(git diff --name-only -- verify/repodata)
 
     # ---- re-verify offline in the build graph ---------------------------
     # `.#supply-chain` == packages.<this-host>.supply-chain == x86_64 on the
@@ -301,7 +351,7 @@ writeShellApplication {
     # aarch64 runner); the updater host has no aarch64 builder.
     say "re-verify offline: nix build .#packages.x86_64-linux.supply-chain"
     if ! nix "''${NIXFLAGS[@]}" build .#packages.x86_64-linux.supply-chain --no-link -L; then
-      git checkout -- pins.nix verify/logs
+      git checkout -- pins.nix verify/logs verify/repodata
       halt "offline re-verify (x86_64) failed against the freshly written pins -- reverted."
       exit 12
     fi
