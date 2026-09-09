@@ -234,8 +234,18 @@ if [ "$L1" -eq 0 ] && [ "$L2" -eq 0 ] && [ "$L3" -eq 0 ]; then
   echo "RESULT: PASS" | tee -a "$LOGDIR/summary.txt"
 
   sri() { nix hash to-sri --type sha256 "$1" 2>/dev/null || nix --extra-experimental-features nix-command hash convert --hash-algo sha256 --to sri "$1"; }
-  p_href="$(repomd_primary_location "$work/repomd.xml" | cut -f1)"
   ver="${VR%-*}"
+
+  # Refresh the vendored repo-index snapshot (lib/verify.nix layer 2 reads these
+  # from disk -- they are not hash-pinned; see verify/repodata/README). These are
+  # the exact bytes layer 2 just GPG-verified in this run. Skipped when a caller
+  # redirected the log root (negative tests) so the committed snapshot is safe.
+  if [ -z "${TRIVALENT_LOG_ROOT:-}" ]; then
+    install -d "$REPO_ROOT/verify/repodata"
+    cp -f "$work/repomd.xml" "$work/repomd.xml.asc" "$REPO_ROOT/verify/repodata/"
+    cp -f "$work/primary.bin" "$REPO_ROOT/verify/repodata/primary.xml.zst"
+    log "refreshed verify/repodata/ (repomd.xml{,.asc}, primary.xml.zst)"
+  fi
 
   cat <<EOF
 
@@ -245,12 +255,6 @@ if [ "$L1" -eq 0 ] && [ "$L2" -eq 0 ] && [ "$L3" -eq 0 ]; then
     rpmUrl = "$SECUREBLUE_REPO_BASEURL/${RPM_LOC:-Packages/trivalent-$VR.$ARCH.rpm}";
     rpmHash = "$(sri "$RPM_SHA256")";
     rpmSha256 = "$RPM_SHA256";
-    repomdUrl = "$SECUREBLUE_REPO_BASEURL/repodata/repomd.xml";
-    repomdHash = "$(sri "$(sha256sum "$work/repomd.xml" | cut -d' ' -f1)")";
-    repomdAscUrl = "$SECUREBLUE_REPO_BASEURL/repodata/repomd.xml.asc";
-    repomdAscHash = "$(sri "$(sha256sum "$work/repomd.xml.asc" | cut -d' ' -f1)")";
-    primaryUrl = "$SECUREBLUE_REPO_BASEURL/$p_href";
-    primaryHash = "$(sri "$(sha256sum "$work/primary.bin" | cut -d' ' -f1)")";
     intotoUrl = "https://github.com/$TRIVALENT_GH_REPO/releases/download/$VR/multiple.intoto.jsonl";
     intotoHash = "$(sri "$(sha256sum "$work/multiple.intoto.jsonl" | cut -d' ' -f1)")";
 --- keyHash (constant, only if it changed): $(sri "$(sha256sum "$work/key.gpg" | cut -d' ' -f1)") ---

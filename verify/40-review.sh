@@ -135,6 +135,32 @@ if [ -d .git ]; then
   fi
 fi
 
+# ---- R5: repo-index snapshot is vendored, not a mutable FOD -------------
+echo "== R5: vendored repodata snapshot =="
+rd="repodata"
+if [ -s "$V/$rd/repomd.xml" ] && [ -s "$V/$rd/repomd.xml.asc" ] && [ -s "$V/$rd/primary.xml.zst" ]; then
+  good "verify/$rd/{repomd.xml,repomd.xml.asc,primary.xml.zst} present"
+else
+  bad "verify/$rd/ snapshot incomplete -- lib/verify.nix layer 2 has nothing to verify"
+fi
+if grep -q 'verify/repodata/repomd.xml' lib/verify.nix; then
+  good "lib/verify.nix reads the repo index from the vendored snapshot"
+else
+  bad "lib/verify.nix no longer points at verify/repodata/ -- did it revert to fetchurl?"
+fi
+if grep -qE '^\s*(repomdUrl|repomdHash|repomdAscUrl|repomdAscHash|primaryUrl|primaryHash)\b' pins.nix; then
+  bad "pins.nix still pins a mutable repo-index FOD -- it will go stale on the next upstream publish"
+else
+  good "pins.nix pins no mutable repo-index FODs"
+fi
+# the snapshot's detached signature must actually verify repomd.xml against the
+# pinned key (grep can't do this; `nix build .#supply-chain` does -- assert the
+# checker still wires the .asc through gpg --verify)
+{ grep -qF -- '--verify ${repomdAsc} ${repomd}' lib/verify.nix &&
+  grep -qE '^\s*gpg .*--verify \$\{repomdAsc\}' lib/verify.nix; } &&
+  good "layer 2 still GPG-verifies the vendored repomd.xml against repomd.xml.asc" ||
+  bad "layer 2 no longer runs gpg --verify over the vendored snapshot"
+
 echo
 [ "$fail" -eq 0 ] && echo "REVIEW: PASS" || echo "REVIEW: FAIL"
 exit "$fail"

@@ -96,7 +96,7 @@ writeShellApplication {
     halt() {
       # if we already rewrote pins.nix for an earlier arch, undo it -- a HALT
       # must touch nothing.
-      git checkout -- pins.nix verify/logs 2>/dev/null || true
+      git checkout -- pins.nix verify/logs verify/repodata 2>/dev/null || true
       echo "$*" >./HALT.txt
       echo "HALT: $*" >&2
     }
@@ -307,13 +307,9 @@ writeShellApplication {
         printf '    rpmUrl = "%s"; # trivalent-%s-url\n' "$(fld rpmUrl)" "$ARCH"
         printf '    rpmHash = "%s"; # trivalent-%s-hash\n' "$(fld rpmHash)" "$ARCH"
         printf '    rpmSha256 = "%s"; # trivalent-%s-sha256\n\n' "$(fld rpmSha256)" "$ARCH"
-        printf '    # signed repo metadata (moves every publish)\n'
-        printf '    repomdUrl = "%s";\n' "$(fld repomdUrl)"
-        printf '    repomdHash = "%s";\n' "$(fld repomdHash)"
-        printf '    repomdAscUrl = "%s";\n' "$(fld repomdAscUrl)"
-        printf '    repomdAscHash = "%s";\n' "$(fld repomdAscHash)"
-        printf '    primaryUrl = "%s";\n' "$(fld primaryUrl)"
-        printf '    primaryHash = "%s";\n\n' "$(fld primaryHash)"
+        printf '    # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored\n'
+        printf '    # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not\n'
+        printf '    # pinned here, because upstream rewrites repomd.xml on every publish.\n\n'
         printf '    # SLSA provenance (immutable per release tag)\n'
         printf '    intotoUrl = "%s";\n' "$(fld intotoUrl)"
         printf '    intotoHash = "%s";\n\n' "$(fld intotoHash)"
@@ -335,10 +331,19 @@ writeShellApplication {
 
     # ---- overall outcome -------------------------------------------------
     if git diff --quiet -- pins.nix; then
+      # no version moved -- drop everything 10-verify wrote, including any
+      # verify/repodata/ refresh (an index-only upstream republish is not a
+      # reason to churn a PR; the committed snapshot still GPG-verifies and
+      # still attests the current pins).
       say "pins.nix unchanged -- no-op (both arches at latest, or benign lag)"
-      git checkout -- verify/logs 2>/dev/null || true
+      git checkout -- verify/logs verify/repodata 2>/dev/null || true
       exit 0
     fi
+
+    # a version moved -> 10-verify has refreshed verify/repodata/ to the snapshot
+    # it just GPG-verified; carry it into the commit (shared across arches --
+    # primary.xml lists every pinned arch, so one snapshot attests them all).
+    while IFS= read -r f; do LOGFILES+=("$f"); done < <(git diff --name-only -- verify/repodata)
 
     # ---- re-verify offline in the build graph ---------------------------
     # `.#supply-chain` == packages.<this-host>.supply-chain == x86_64 on the
@@ -346,7 +351,7 @@ writeShellApplication {
     # aarch64 runner); the updater host has no aarch64 builder.
     say "re-verify offline: nix build .#packages.x86_64-linux.supply-chain"
     if ! nix "''${NIXFLAGS[@]}" build .#packages.x86_64-linux.supply-chain --no-link -L; then
-      git checkout -- pins.nix verify/logs
+      git checkout -- pins.nix verify/logs verify/repodata
       halt "offline re-verify (x86_64) failed against the freshly written pins -- reverted."
       exit 12
     fi

@@ -97,7 +97,9 @@ jobs:
           # `git status --porcelain` is `XY <path>` -- 2 status cols + a space --
           # for both ` M` (tracked, modified) and `??` (untracked, e.g. a new
           # verify/logs/<v> dir), so anchor on `^.{3}` not `^.M? `.
-          if git status --porcelain | grep -vE '^.{3}(pins\.nix|verify/logs/)' ; then
+          # verify/repodata/ is the vendored repo-index snapshot 10-verify
+          # refreshes alongside a bump.
+          if git status --porcelain | grep -vE '^.{3}(pins\.nix|verify/logs/|verify/repodata/)' ; then
             echo "::error::updater changed files it must not for a version bump"
             git checkout -- . && git clean -fd
             exit 1

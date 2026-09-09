@@ -1,8 +1,10 @@
 # Pure, offline re-verification of the pinned RPM, in the build graph.
 # `$out/trivalent.rpm` only exists if all three layers pass, so mk-trivalent's
 # `src` cannot be an unverified RPM. `$out/supply-chain.log` is the transcript
-# (it also ships inside the package). NO network: every input is a FOD, and
-# cosign runs offline against the vendored Sigstore trusted root.
+# (it also ships inside the package). NO network: the key / RPM / provenance are
+# FODs, the repo index (repomd.xml{,.asc}, primary.xml.zst) is a vendored
+# snapshot under verify/repodata/ that layer 2 GPG-verifies, and cosign runs
+# offline against the vendored Sigstore trusted root.
 #
 #   layer 1  rpm body signature   -- rpmkeys -Kv against the pinned key
 #   layer 2  signed repodata      -- gpg --verify repomd.xml.asc, then bind the
@@ -38,9 +40,12 @@ let
     };
   key = f "secureblue.gpg" pins.keyUrl pins.keyHash;
   rpmFile = f "trivalent-${pin.versionRelease}.${arch}.rpm" pin.rpmUrl pin.rpmHash;
-  repomd = f "repomd.xml" pin.repomdUrl pin.repomdHash;
-  repomdAsc = f "repomd.xml.asc" pin.repomdAscUrl pin.repomdAscHash;
-  primary = f "primary.xml.zst" pin.primaryUrl pin.primaryHash;
+  # vendored snapshot of repo.secureblue.dev/repodata/ -- GPG-verified in layer 2
+  # below. Not a FOD: repomd.xml moves on every upstream publish. See
+  # verify/repodata/README.
+  repomd = ../verify/repodata/repomd.xml;
+  repomdAsc = ../verify/repodata/repomd.xml.asc;
+  primary = ../verify/repodata/primary.xml.zst;
   intoto = f "multiple.intoto.jsonl" pin.intotoUrl pin.intotoHash;
   trustedRoot = ../verify/sigstore-trusted-root.json;
 in

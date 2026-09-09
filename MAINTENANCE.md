@@ -5,9 +5,18 @@ that fails closed when reality stops matching it.
 
 | pinned | file | rotates | procedure |
 |---|---|---|---|
-| Trivalent version + repodata + provenance | `pins.nix` per-arch block | every upstream release | [update cycle](#per-release-update) |
+| Trivalent version + provenance | `pins.nix` per-arch block (`versionRelease`, `rpm*`, `intoto*`) | every upstream release | [update cycle](#per-release-update) |
+| secureblue repo index | `verify/repodata/{repomd.xml,repomd.xml.asc,primary.xml.zst}` (vendored snapshot, GPG-checked in `lib/verify.nix` layer 2) | every upstream publish, refreshed automatically alongside a bump | [update cycle](#per-release-update) |
 | secureblue signing key | `verify/fingerprint.env` + `pins.nix` `keyHash` | rarely (key rotation) | [key rotation](#key-rotation-f1) |
 | Sigstore trusted root | `verify/sigstore-trusted-root.json` + `pins.nix` `sigstoreTrustedRootSha256` | ~yearly (Sigstore announces) | [trusted-root rotation](#sigstore-trusted-root-rotation) |
+
+The repo index is **vendored, not fetched**: `repo.secureblue.dev` rewrites
+`repodata/repomd.xml{,.asc}` on every publish of any version, so a hash-pinned
+`fetchurl` used to turn `main` CI red on every secureblue release. The snapshot
+in `verify/repodata/` is GPG-verified in-build against the pinned key and
+`nix run .#update` overwrites it (via `verify/10-verify-supply-chain.sh`) each
+time a version moves. An index-only upstream republish with no version change is
+ignored -- the committed snapshot still verifies and still attests the pins.
 
 ---
 
@@ -147,18 +156,20 @@ aarch64 tag is the *higher* `-<release>` of the same-day pair. By hand:
 ```sh
 nix run .#update            # per arch: preflight -> discover -> verify (live) ->
                             # rewrite that arch's pins.nix block + verify/logs/<v-r>/
+                            # + refresh verify/repodata/ (the just-verified snapshot)
                             # -> re-verify .#packages.x86_64-linux.supply-chain
                             # -> print the updateScript JSON
 ./verify/40-review.sh       # -> REVIEW: PASS
 nix flake check             # x86_64; add --all-systems (slow, needs an aarch64
                             # builder or qemu-binfmt) to also check aarch64
-git add pins.nix verify/logs && git commit
+git add pins.nix verify/logs verify/repodata && git commit
 ```
 
 To bump only aarch64 by hand on an x86_64 box (it does not run the RPM, so no
 aarch64 builder needed):
 `./verify/10-verify-supply-chain.sh <aarch64-v-r> aarch64` -> paste its block
-into `pins.nix` `aarch64 = { … }` -> commit `pins.nix` + `verify/logs/<v-r>/`.
+into `pins.nix` `aarch64 = { … }` -> commit `pins.nix` + `verify/logs/<v-r>/` +
+`verify/repodata/` (10-verify refreshes the snapshot in place).
 
 `nix run .#update` HALTs (writes `HALT.txt`, exits 20/22/30/40/41, touches
 nothing) on F1/F2/F3 -- key change, trusted-root mismatch, provenance format

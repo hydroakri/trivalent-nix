@@ -1,0 +1,17 @@
+Vendored snapshot of repo.secureblue.dev/repodata/ at the current pin.
+
+  repomd.xml       signed repo index (matches pins.nix versionRelease)
+  repomd.xml.asc   secureblue's detached GPG signature over repomd.xml
+  primary.xml.zst  the package list repomd.xml's <checksum> vouches for
+                   (upstream name a8fd0abb...-primary.xml.zst; identity here
+                    is the path, integrity is the checksum inside repomd.xml)
+
+lib/verify.nix layer 2 GPG-verifies these against the pinned secureblue key and
+binds the pinned RPM's sha256 to the <checksum> primary.xml lists for this arch.
+They are vendored (not fetched) because repo.secureblue.dev rewrites repomd.xml
+on every publish of any version -- a live fetch breaks the build on every
+upstream release.
+
+Refreshed automatically by `nix run .#update` (verify/10-verify-supply-chain.sh
+writes the freshly signature-checked files here). To refresh by hand, run
+./verify/10-verify-supply-chain.sh <version-release> <arch> from a checkout.
