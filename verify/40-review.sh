@@ -60,19 +60,30 @@ fi
 # ---- R2: version-map coverage ----------------------------------------------
 echo "== R2: version-map branch coverage =="
 vm="$V/20-version-map.sh"
+up="lib/update.nix"
 grep -q 'exit 20' "$vm" && grep -q 'ahead of the newest listed' "$vm" &&
-  good "reverse-inconsistency branch (repodata ahead / tag absent -> 20) present" ||
-  bad "reverse-inconsistency branch missing or altered"
+  good "tampering branch (repodata ahead of an EXISTING release -> 20) present" ||
+  bad "tampering branch missing or altered"
 grep -q 'older "$A" "$B"' "$vm" && grep -q 'exit 21' "$vm" &&
   good "delay branch (repodata behind -> retry -> 21) present" ||
   bad "delay branch missing or altered"
 grep -Eq 'exit 22' "$vm" &&
   good "unparseable branch (-> 22) present" ||
   bad "unparseable branch missing"
-# the two disagreement directions must be DIFFERENT exit codes
-grep -q 'exit 20' "$vm" && grep -q 'exit 21' "$vm" &&
-  good "delay (21) and tampering (20) are distinct codes" ||
-  bad "delay and tampering not distinguished"
+# the disagreement directions must be DISTINCT exit codes
+grep -q 'exit 20' "$vm" && grep -q 'exit 21' "$vm" && grep -q 'exit 23' "$vm" &&
+  good "delay (21) / tampering (20) / release-in-flight (23) are distinct codes" ||
+  bad "delay / tampering / in-flight not all distinguished"
+# the "no GitHub release yet" (23) path must hand the caller the SIGNED
+# repodata's timestamp, and the caller must NOT halt inside the grace window:
+# it re-verifies (layers 1+2 genuine, layer 3 only "missing") and escalates
+# only once REPOMD_REVISION is older than GRACE_HOURS.
+grep -q 'REPOMD_REVISION=' "$vm" &&
+  good "23 branch emits REPOMD_REVISION= for the grace clock" ||
+  bad "23 branch does not emit REPOMD_REVISION="
+grep -q 'GRACE_HOURS' "$up" && grep -qE '"\$v_rc" -eq 31 .* "\$l12_ok" -eq 1' "$up" &&
+  good "update.nix: 23 -> grace on a signed RPM with only layer 3 missing" ||
+  bad "update.nix: 23 handling missing or does not gate on layers 1+2 + rc 31"
 
 # ---- R3: pass-criterion validity ----------------------------------------
 echo "== R3: 10-verify pass criterion =="

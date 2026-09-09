@@ -21,8 +21,16 @@
 #   0   A == B and tag A exists       -> prints  VERSION=<v-r>   on stdout
 #   10  A older than B (repomd lag)   -> benign; retried up to VMAP_RETRIES
 #   21  still lagging after budget    -> ALARM (not a silent skip)
-#   20  repomd names a v-r with no GitHub release, OR repomd ahead of published
-#                                     -> ALARM: possible distribution tampering
+#   23  repomd names a v-r that has NO GitHub release yet -> also prints
+#       VERSION=<v-r> and REPOMD_REVISION=<unix-ts of the signed repomd.xml>.
+#       Ambiguous on its own: could be a release still in flight (secureblue
+#       pushes the RPM to the repo before cutting the GitHub release) OR
+#       tampering. The CALLER decides -- run 10-verify: if the RPM passes
+#       layers 1+2 and only layer 3 is "missing" (rc 31, not "changed" rc 30),
+#       it's a genuine signed build with no provenance yet -> wait; escalate
+#       only once REPOMD_REVISION is older than a grace window.
+#   20  release A exists but its provenance is for the wrong arch, OR repomd is
+#       ahead of an EXISTING newest release -> ALARM: distribution tampering
 #   22  a side is missing/unparseable -> ALARM: refuse to guess
 #
 # Env: VMAP_RETRIES (default 12), VMAP_INTERVAL seconds (default 300).
@@ -115,9 +123,14 @@ while :; do
   log "Path B (github newest): $B"
 
   if ! gh release view "$A" --repo "$TRIVALENT_GH_REPO" --json tagName >/dev/null 2>&1; then
-    printf 'ALARM: repodata advertises trivalent %s but GitHub has no release tagged %s.\n' "$A" "$A" >&2
-    printf '       Benign lag makes GitHub *ahead*, never behind -- treat as distribution tampering.\n' >&2
-    exit 20
+    # repodata names a version with NO GitHub release. Hand it to the caller
+    # with the signed repodata's own timestamp -- benign "release in flight"
+    # vs tampering is decided against the RPM's signatures + a grace window.
+    rev="$(xmllint --xpath 'string(//*[local-name()="revision"])' "$work/repomd.xml" 2>/dev/null)"
+    printf 'PENDING: repodata advertises trivalent %s; GitHub has no release tagged %s yet.\n' "$A" "$A" >&2
+    echo "VERSION=$A"
+    echo "REPOMD_REVISION=${rev:-0}"
+    exit 23
   fi
   if ! prov_has_arch "$A"; then
     printf 'ALARM: GitHub release %s exists but its SLSA provenance does not attest trivalent-%s.%s.rpm.\n' "$A" "$A" "$arch" >&2

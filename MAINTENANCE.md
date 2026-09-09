@@ -165,6 +165,16 @@ nothing) on F1/F2/F3 -- key change, trusted-root mismatch, provenance format
 change, repodata ahead of GitHub. The CI turns a HALT into a `blocked` GitHub
 issue; resolve it with the procedures in this file.
 
+**Release in flight (not a HALT).** secureblue pushes a new RPM to
+`repo.secureblue.dev` before cutting the GitHub release that carries the SLSA
+provenance. While that RPM is signed by the pinned key and the signed repodata
+attests it (layers 1+2 pass) but layer 3 is only *missing* (not "changed"), the
+updater treats the arch as a **no-op** and re-checks next run -- no issue. It
+escalates to an F3 issue only once the signed repodata's own revision timestamp
+is older than `TRIVALENT_INFLIGHT_GRACE_HOURS` (default 48). Nothing to do but
+wait for secureblue to publish the release, or investigate if the grace window
+passes.
+
 After a bump that changes the launcher or the sandbox wrapper, also run
 `verify/30-sandbox-selfcheck.sh` on real hardware (needs `ptrace`): besides the
 sandbox parity checks it now asserts a system `LD_PRELOAD` sentinel never enters
