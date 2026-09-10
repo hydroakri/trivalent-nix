@@ -1,0 +1,13 @@
+== layer 1: rpm package body signature ==
+-- rpmkeys --dbpath (temp) --import <verified key>
+-- rpmkeys --dbpath (temp) -Kv /tmp/tmp.MND71cWqpu/trivalent-153.0.8010.36-447235.x86_64.rpm
+/tmp/tmp.MND71cWqpu/trivalent-153.0.8010.36-447235.x86_64.rpm:
+    Header V4 EdDSA/SHA512 Signature, key ID f47b3e41: OK
+    Header SHA256 digest: OK
+    Header SHA1 digest: OK
+    Payload SHA256 digest: OK
+    MD5 digest: OK
+rpmkeys rc=0
+matched OK sig lines :     Header V4 EdDSA/SHA512 Signature, key ID f47b3e41: OK
+bad / nokey lines    : <none>
+OK: layer 1 verified (rpm body signed by key ...f47b3e41, traces to 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41)
