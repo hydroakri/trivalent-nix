@@ -119,6 +119,12 @@ jobs:
       - name: Pre-PR validation
         if: steps.outcome.outputs.proceed == 'true'
         run: |
+          # `nix flake check` evaluates the flake from the git tree, so the
+          # verify/logs/<new-v-r>/ dir the updater just wrote (referenced by
+          # mk-trivalent's verifyLogDir + the pin-log-present check) is invisible
+          # until git knows about it. Intent-to-add is enough and keeps the tree
+          # otherwise untouched for the real `git add` in "Open PR" below.
+          git add -N pins.nix verify/logs verify/repodata
           nix flake check --print-build-logs
           nix build .#trivalent .#supply-chain --print-build-logs
 
