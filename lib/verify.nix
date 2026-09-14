@@ -125,13 +125,19 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
 
     # regex-escape the builder id for --certificate-identity-regexp
     bid_re="$(printf '%s' "$slsaBuilderId" | sed 's/[.[\*^$()+?{|]/\\&/g')"
+    # --digest/--digestAlg instead of passing $rpmFile as the blob: cosign reads
+    # a blob argument through an OCI-layer code path with a hardcoded 128MiB cap
+    # ("size of layer (N) exceeded the limit (134217728)"), which the aarch64
+    # RPM cleared at Chromium 153. We already have rpmSha (bound to this RPM by
+    # layers 1+2 above); --check-claims=true (the default) verifies it against
+    # the in-toto subject exactly as it would from re-hashing the file.
     cosign verify-blob-attestation \
       --bundle ${intoto} \
       --trusted-root ${trustedRoot} \
       --certificate-identity-regexp "^''${bid_re}\$" \
       --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
       --type slsaprovenance \
-      ${rpmFile} 2>&1 | tee l3
+      --digest "$rpmSha" --digestAlg sha256 2>&1 | tee l3
     grep -q '^Verified OK$' l3 || fail "layer3: cosign did not print 'Verified OK'"
 
     # policy on the (now cryptographically trusted) statement
