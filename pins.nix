@@ -49,21 +49,21 @@
   };
 
   aarch64 = {
-    versionRelease = "152.0.7977.82-447136"; # trivalent-aarch64-vr
-    version = "152.0.7977.82"; # trivalent-aarch64-ver
+    versionRelease = "153.0.8010.36-447317"; # trivalent-aarch64-vr
+    version = "153.0.8010.36"; # trivalent-aarch64-ver
 
-    rpmUrl = "https://repo.secureblue.dev/Packages/trivalent-152.0.7977.82-447136.aarch64.rpm"; # trivalent-aarch64-url
-    rpmHash = "sha256-Y1LFCU9tyoDrugBev7CM/r/zhWIxd/C8VcMUFFAKwAo="; # trivalent-aarch64-hash
-    rpmSha256 = "6352c5094f6dca80ebba005ebfb08cfebff385623177f0bc55c31414500ac00a"; # trivalent-aarch64-sha256
+    rpmUrl = "https://repo.secureblue.dev/Packages/trivalent-153.0.8010.36-447317.aarch64.rpm"; # trivalent-aarch64-url
+    rpmHash = "sha256-QpfCyimhtO+Nr7erNP0uU160WB5+aDpfDJ22eJzf8vw="; # trivalent-aarch64-hash
+    rpmSha256 = "4297c2ca29a1b4ef8dafb7ab34fd2e535eb4581e7e683a5f0c9db6789cdff2fc"; # trivalent-aarch64-sha256
 
     # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored
     # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not
     # pinned here, because upstream rewrites repomd.xml on every publish.
 
     # SLSA provenance (immutable per release tag)
-    intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/152.0.7977.82-447136/multiple.intoto.jsonl";
-    intotoHash = "sha256-vS+GMWUuLoY48UiV4P3YF1MXLgSP2+OGrpTRALHMAxE=";
+    intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/153.0.8010.36-447317/multiple.intoto.jsonl";
+    intotoHash = "sha256-P5rgLbd29U0sf1u38VFWW2YUytIarsxqditUYHTCiLo=";
 
-    # verified: 2026-09-09  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-09-14  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 }
