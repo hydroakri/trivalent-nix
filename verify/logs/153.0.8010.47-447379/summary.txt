@@ -1,0 +1,11 @@
+version-release : 153.0.8010.47-447379
+arch            : x86_64
+rpm             : trivalent-153.0.8010.47-447379.x86_64.rpm
+rpm sha256      : c67b43d1c33a76d2e1c4e7a95e4b7be7ae5b13fa2ff4f3d9604268a4b3aba701
+repodata sha256 : c67b43d1c33a76d2e1c4e7a95e4b7be7ae5b13fa2ff4f3d9604268a4b3aba701
+signing key fpr : 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41  (pinned 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41)
+slsa builder    : https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0
+layer 1 (rpm sig)      exit: 0
+layer 2 (repodata sig) exit: 0
+layer 3 (provenance)   exit: 0
+RESULT: PASS
