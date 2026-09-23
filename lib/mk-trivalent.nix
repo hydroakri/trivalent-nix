@@ -142,7 +142,14 @@ let
 
     unpackPhase = ''
       runHook preUnpack
-      rpm2cpio "$src" | cpio -idm --quiet
+      # Don't pipe rpm2cpio directly into cpio: cpio exits as soon as it hits
+      # the archive's TRAILER!!! record, which can close the pipe while
+      # rpm2cpio is still flushing trailing padding -- rpm2cpio then dies with
+      # SIGPIPE (exit 141) even though extraction already succeeded. Land the
+      # cpio stream on disk first so rpm2cpio always runs to completion.
+      rpm2cpio "$src" > payload.cpio
+      cpio -idm --quiet < payload.cpio
+      rm payload.cpio
       runHook postUnpack
     '';
 
