@@ -1,0 +1,10 @@
+== layer 3: SLSA provenance ==
+release 154.0.8037.57-447534 assets:
+  multiple.intoto.jsonl
+-- slsa-verifier verify-artifact
+Verified build using builder "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit 9f28d594a007791199993ea36493bf5b9d816325
+Verifying artifact /tmp/tmp.5Ge8wNiuay/trivalent-154.0.8037.57-447534.aarch64.rpm: PASSED
+
+PASSED: SLSA verification passed
+slsa-verifier rc=0
+OK: layer 3 verified
