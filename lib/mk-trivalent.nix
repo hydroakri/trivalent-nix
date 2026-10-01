@@ -193,6 +193,25 @@ let
           patchelf --set-interpreter "$interp" "$elf"
           old="$(patchelf --print-rpath "$elf" 2>/dev/null || true)"
           patchelf --set-rpath "$newrpath''${old:+:$old}" "$elf"
+
+          # One glibc per process. patchelf writes DT_RUNPATH, which only covers
+          # this ELF's *direct* deps; every nixpkgs lib in runtimeLibs carries its
+          # own RUNPATH -> nixpkgs' glibc. libc.so.6 is safe (already mapped by
+          # the exe, so later NEEDED entries dedupe by soname), but the stub
+          # sonames (librt, libpthread, libdl, ...) are not NEEDED by the exe, so
+          # the first nixpkgs lib that wants one pulls nixpkgs' copy, which is
+          # version-paired with nixpkgs' ld.so/libc, not Fedora's. nixpkgs glibc
+          # 2.44's librt.so.1 then dies on GLIBC_PRIVATE `__pointer_chk_guard`.
+          # Making the exe NEEDED each Fedora-provided soname maps it from the
+          # Fedora tree first (main's direct deps load before any grandchild),
+          # so every later request dedupes onto it -- independent of whichever
+          # glibc nixpkgs ships.
+          for so in libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libutil.so.1 \
+                    libresolv.so.2 libanl.so.1 libmvec.so.1; do
+            if [ -e "${fedoraGlibc}/usr/lib64/$so" ]; then
+              patchelf --add-needed "$so" "$elf"
+            fi
+          done
         done
       ''}
 
@@ -255,6 +274,24 @@ let
           fail "transitive shared-lib closure has unresolved entries"
         fi
         echo "  transitive closure resolves ($(printf '%s\n' "$list" | grep -c '=>') objects)"
+
+        ${lib.optionalString (glibcStrategy == "fedora-rpm") ''
+          # (2b) exactly one glibc: any soname the Fedora tree provides must
+          #      resolve INTO it. A second copy (nixpkgs') is ABI-paired with a
+          #      different ld.so/libc and breaks at relocation time -- but only
+          #      when nixpkgs' glibc drifts far enough, so the (3) load test
+          #      alone passes by luck until it doesn't. Fail on the structure.
+          while read -r so _ path _; do
+            case "$so" in ld-linux*|linux-vdso*|"") continue ;; esac
+            [ -n "$path" ] || continue
+            if [ -e "${fedoraGlibc}/usr/lib64/$so" ]; then
+              case "$path" in
+                "${fedoraGlibc}"/*) ;;
+                *) fail "'$so' resolves to $path, not the Fedora glibc (second glibc in the process)" ;;
+              esac
+            fi
+          done <<< "$list"
+        ''}
 
         # (3) real load + relocation -- only on the browser binary; the crashpad
         #     handler is an IPC daemon, not a CLI, and --version misbehaves.
