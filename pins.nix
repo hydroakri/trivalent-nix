@@ -30,40 +30,40 @@
   # refreshes the snapshot alongside each bump.
 
   x86_64 = {
-    versionRelease = "154.0.8037.92-447681"; # trivalent-x86_64-vr
-    version = "154.0.8037.92"; # trivalent-x86_64-ver
+    versionRelease = "154.0.8037.97-447729"; # trivalent-x86_64-vr
+    version = "154.0.8037.97"; # trivalent-x86_64-ver
 
-    rpmUrl = "https://repo.secureblue.dev/Packages/trivalent-154.0.8037.92-447681.x86_64.rpm"; # trivalent-x86_64-url
-    rpmHash = "sha256-F+liqE8zwEvg2lJ/DArDnGhNcH7Oe9eHhRSkykLhGHg="; # trivalent-x86_64-hash
-    rpmSha256 = "17e962a84f33c04be0da527f0c0ac39c684d707ece7bd7878514a4ca42e11878"; # trivalent-x86_64-sha256
+    rpmUrl = "https://repo.secureblue.dev/Packages/trivalent-154.0.8037.97-447729.x86_64.rpm"; # trivalent-x86_64-url
+    rpmHash = "sha256-BtIZBjkZcgDl7aXGbZAspDTtm0PK8/R1eH/DAiP34bY="; # trivalent-x86_64-hash
+    rpmSha256 = "06d2190639197200e5eda5c66d902ca434ed9b43caf3f475787fc30223f7e1b6"; # trivalent-x86_64-sha256
 
     # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored
     # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not
     # pinned here, because upstream rewrites repomd.xml on every publish.
 
     # SLSA provenance (immutable per release tag)
-    intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/154.0.8037.92-447681/multiple.intoto.jsonl";
-    intotoHash = "sha256-CEGKYAPZAnbN7uDlmqqJIyJ4tJpeYLy+nUugt3Sd0f4=";
+    intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/154.0.8037.97-447729/multiple.intoto.jsonl";
+    intotoHash = "sha256-xWSWDn+lb/b2YeNW2B9wtBbjQRlozdeD3KuSnDVfb5g=";
 
-    # verified: 2026-10-01  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-10-03  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 
   aarch64 = {
-    versionRelease = "154.0.8037.92-447683"; # trivalent-aarch64-vr
-    version = "154.0.8037.92"; # trivalent-aarch64-ver
+    versionRelease = "154.0.8037.97-447739"; # trivalent-aarch64-vr
+    version = "154.0.8037.97"; # trivalent-aarch64-ver
 
-    rpmUrl = "https://repo.secureblue.dev/Packages/trivalent-154.0.8037.92-447683.aarch64.rpm"; # trivalent-aarch64-url
-    rpmHash = "sha256-uxpc+T7UKW5/LI3qHNcFIvISFLQfKKHNnTFkTAo4N8k="; # trivalent-aarch64-hash
-    rpmSha256 = "bb1a5cf93ed4296e7f2c8dea1cd70522f21214b41f28a1cd9d31644c0a3837c9"; # trivalent-aarch64-sha256
+    rpmUrl = "https://repo.secureblue.dev/Packages/trivalent-154.0.8037.97-447739.aarch64.rpm"; # trivalent-aarch64-url
+    rpmHash = "sha256-L2AOO+GFMiWL30eP042FpPLnXrXlwdwewPSPoUleXG0="; # trivalent-aarch64-hash
+    rpmSha256 = "2f600e3be18532258bdf478fd38d85a4f2e75eb5e5c1dc1ec0f48fa1495e5c6d"; # trivalent-aarch64-sha256
 
     # signed repo metadata (repomd.xml{,.asc}, primary.xml.zst) is a vendored
     # snapshot in verify/repodata/ -- GPG-checked in lib/verify.nix layer 2, not
     # pinned here, because upstream rewrites repomd.xml on every publish.
 
     # SLSA provenance (immutable per release tag)
-    intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/154.0.8037.92-447683/multiple.intoto.jsonl";
-    intotoHash = "sha256-Hc9N3ynkgxwyWbqCuFmODUIvFPPSWqUEjZtcBiuLhJQ=";
+    intotoUrl = "https://github.com/secureblue/Trivalent/releases/download/154.0.8037.97-447739/multiple.intoto.jsonl";
+    intotoHash = "sha256-wA+TXvXcnjWzLZAIK/0HLvfda9bTgvqVgkssKSkRr0Y=";
 
-    # verified: 2026-10-01  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
+    # verified: 2026-10-03  layers 1+2+3 = 0/0/0  key 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41
   };
 }
