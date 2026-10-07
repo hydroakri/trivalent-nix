@@ -50,6 +50,9 @@ jobs:
 
       - name: Run the updater
         id: update
+        env:
+          # outside the work tree for the same reason as update.json below
+          TRIVALENT_NOTICE_FILE: ${{ runner.temp }}/notices.tsv
         run: |
           set +e
           # write the JSON outside the work tree so it never shows up in
@@ -57,6 +60,28 @@ jobs:
           nix run .#update > "$RUNNER_TEMP/update.json"
           echo "rc=$?" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/update.json"
+
+      # A signed RPM whose GitHub release/provenance is overdue is upstream lag,
+      # not a HALT (layers 1+2 passed; nothing unverified was pinned). One issue
+      # per stuck version, opened once, never a failing run, no `security` label.
+      # Recurrences stay silent: the open issue is the signal. Closing it while the
+      # version is still stuck re-opens a fresh one next run.
+      - name: Note overdue upstream releases
+        if: always()
+        env:
+          NOTICES: ${{ runner.temp }}/notices.tsv
+        run: |
+          [ -s "$NOTICES" ] || { echo "no overdue upstream releases"; exit 0; }
+          while IFS=$'\t' read -r arch ver msg; do
+            title="trivalent upstream release overdue: $ver ($arch)"
+            num="$(gh issue list --state open --label blocked --search "in:title \"$title\"" --json number --jq '.[0].number')" || num=""
+            if [ -n "$num" ]; then
+              echo "#$num already open for $ver ($arch)"
+            else
+              gh issue create --title "$title" --label blocked --body "$msg" \
+                || echo "::warning::could not open the overdue-release issue for $ver ($arch)"
+            fi
+          done < "$NOTICES"
 
       - name: Classify the outcome
         id: outcome
