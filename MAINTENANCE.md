@@ -181,10 +181,15 @@ issue; resolve it with the procedures in this file.
 provenance. While that RPM is signed by the pinned key and the signed repodata
 attests it (layers 1+2 pass) but layer 3 is only *missing* (not "changed"), the
 updater treats the arch as a **no-op** and re-checks next run -- no issue. It
-escalates to an F3 issue only once the signed repodata's own revision timestamp
-is older than `TRIVALENT_INFLIGHT_GRACE_HOURS` (default 48). Nothing to do but
-wait for secureblue to publish the release, or investigate if the grace window
-passes.
+opens a `blocked` issue ("trivalent upstream release overdue: <v-r> (<arch>)")
+only once the signed repodata's own revision timestamp is older than
+`TRIVALENT_INFLIGHT_GRACE_HOURS` (default 48). That is still **not a HALT**: the
+arch stays pinned (nothing unverified is ever pinned), the other arch can still
+bump, the run stays green, the issue is opened once per stuck version and
+carries no `security` label. Nothing to do but wait for secureblue to publish the
+release, or chase them if it drags on. The F3 HALT (exit 20, red run, `security`
+label) is reserved for the genuinely suspicious shapes: wrong-arch provenance,
+repodata ahead of an *existing* release, or layers 1+2 not clean.
 
 After a bump that changes the launcher or the sandbox wrapper, also run
 `verify/30-sandbox-selfcheck.sh` on real hardware (needs `ptrace`): besides the

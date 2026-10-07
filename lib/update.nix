@@ -18,9 +18,12 @@
 #   0   ok, pins.nix rewritten  OR  no-op (nothing to do -- incl. an arch whose
 #       newest RPM is signed + in the repo but whose GitHub release / SLSA
 #       provenance is not published yet, within the GRACE_HOURS window)
+#       A signed in-flight build PAST the grace window is also exit 0 for that
+#       arch (skipped, still pinned): its notice is appended to
+#       $TRIVALENT_NOTICE_FILE for the CI to turn into a non-failing issue.
 #   20  HALT: repodata advertises a release GitHub never published, and it is
 #       NOT a clean in-flight build -- wrong-arch provenance / repodata ahead of
-#       an existing release / no provenance past the grace window (F3)
+#       an existing release / layers 1+2 not clean (F3)
 #   22  HALT: version map unparseable
 #   30  HALT: SLSA provenance format changed (F2)
 #   40  HALT: signing key changed, evidence incomplete -- fully manual (F1)
@@ -92,6 +95,11 @@ writeShellApplication {
     # tampering -- wait this many hours (measured from the SIGNED repodata's own
     # revision timestamp) before escalating to an F3 issue.
     GRACE_HOURS="''${TRIVALENT_INFLIGHT_GRACE_HOURS:-48}"
+    # where an "overdue in flight" notice is appended (tab-separated:
+    # arch, version-release, message). Unset = just print it. Kept OUT of the work
+    # tree so the CI working-tree guard is unaffected.
+    NOTICE_FILE="''${TRIVALENT_NOTICE_FILE:-}"
+    [ -z "$NOTICE_FILE" ] || : >"$NOTICE_FILE"
 
     halt() {
       # if we already rewrote pins.nix for an earlier arch, undo it -- a HALT
@@ -247,8 +255,20 @@ writeShellApplication {
               say "$ARCH: $C RPM is signed + in the repo, its GitHub release/provenance is not published yet (repodata is ''${age_h}h old, grace ''${GRACE_HOURS}h) -- skipping this arch this run"
               continue
             fi
-            halt "F3: $C ($ARCH) has been on repo.secureblue.dev for ''${age_h}h (> ''${GRACE_HOURS}h) with no GitHub release / SLSA provenance. The RPM is signed by $FPR and the repodata attests it, so this is not endpoint tampering -- but it is long overdue. Check secureblue's release status."
-            exit 20
+            # Overdue, but still the benign shape (layers 1+2 passed: signed by the
+            # pinned key + attested by the signed repodata; only layer 3 is
+            # *missing*). Nothing unverified is ever pinned -- we just don't bump
+            # this arch -- so this is an upstream-lag notice, not a HALT: skip the
+            # arch like the in-grace case and let the other arch proceed. The
+            # notice goes to TRIVALENT_NOTICE_FILE (outside the work tree, so the
+            # CI working-tree guard never sees it); the workflow turns it into one
+            # issue per stuck version without failing the run.
+            msg="$C ($ARCH) has been on repo.secureblue.dev for ''${age_h}h (> ''${GRACE_HOURS}h) with no GitHub release / SLSA provenance. The RPM is signed by $FPR and the signed repodata attests it (layers 1+2 pass), so this is not endpoint tampering -- but it is long overdue. $ARCH stays pinned at $PINNED_VR. Check secureblue's release status."
+            say "$ARCH: OVERDUE (not a HALT): $msg"
+            if [ -n "$NOTICE_FILE" ]; then
+              printf '%s\t%s\t%s\n' "$ARCH" "$C" "$msg" >>"$NOTICE_FILE"
+            fi
+            continue
           fi
           # not the benign shape: layer 1/2 failed, or provenance format changed
           # (rc 30), or the timestamp is unreadable -> treat as real.
