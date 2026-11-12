@@ -91,7 +91,7 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
     rpmkeys --dbpath "$PWD/rpmdb" --import ${key}
     rpmkeys --dbpath "$PWD/rpmdb" -Kv ${rpmFile} > l1 || true
     cat l1
-    grep -Eqi "signature,? +key (id|fingerprint) +[0-9a-f]*$fprShort: ok" l1 \
+    grep -Eqi "signature,? +key (id|fingerprint):? +[0-9a-f]*$fprShort: ok" l1 \
       || fail "layer1: no OK signature from key ...$fprShort"
     ! grep -Eqi ': (nokey|bad)( |$|\()' l1 || fail "layer1: a digest/signature reported BAD/NOKEY"
     echo "layer 1 OK"
