@@ -151,7 +151,7 @@ set +e
   echo "rpmkeys rc=$rk_rc"
   # rpm-sequoia prints the short (32-bit) key id: "...Signature, key ID f47b3e41: OK"
   # older rpm prints 64-bit; match KEYID8 as a suffix of the hex token before ": OK".
-  ok_sig="$(grep -Ei "signature,? +key (id|fingerprint) +[0-9a-f]*${KEYID8}: ok" "$work/rk.out" || true)"
+  ok_sig="$(grep -Ei "signature,? +key (id|fingerprint):? +[0-9a-f]*${KEYID8}: ok" "$work/rk.out" || true)"
   # any digest/signature line reported BAD, or the key not present (NOKEY).
   # ("RSA/DSA signature: NOTFOUND" is normal for an EdDSA-only rpm -- not a failure.)
   bad="$(grep -Ei ': (nokey|bad)( |$|\()' "$work/rk.out" || true)"
