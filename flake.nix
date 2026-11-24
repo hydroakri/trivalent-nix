@@ -30,7 +30,10 @@
             nixfmt.enable = true;
             statix.enable = true;
             deadnix.enable = true;
-            shfmt.enable = true;
+            shfmt = {
+              enable = true;
+              indent_size = 2;
+            };
           };
           settings.formatter.shfmt.excludes = [ "verify/logs/**" ];
         }
@@ -156,6 +159,26 @@
           # pure offline re-verification of the pinned RPM (layers 1+2+3) --
           # `nix flake check` fails if any layer fails.
           supply-chain = self.packages.${system}.supply-chain;
+          # contract test for the `rpmkeys -Kv` text parser shared by lib/verify.nix
+          # and verify/10-verify-supply-chain.sh, against recorded rpm outputs
+          # (verify/testdata/rpmkeys). A new rpm that phrases the signature line
+          # differently is caught here, with a pointer to the one file to widen.
+          rpm-sig-parser =
+            pkgs.runCommand "rpm-sig-parser"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.gnugrep
+                  pkgs.coreutils
+                ];
+              }
+              ''
+                mkdir -p v/lib v/testdata
+                cp ${./verify/lib/rpm-sig.sh} v/lib/rpm-sig.sh
+                cp -r ${./verify/testdata/rpmkeys} v/testdata/rpmkeys
+                bash ${./verify/lib/rpm-sig-test.sh} v
+                touch $out
+              '';
           # cheap eval-only gate: the pinned SRI is well-formed and the log exists
           pin-log-present = pkgs.runCommand "pin-log-present" { } ''
             test -f ${./verify/logs + "/${pins.${arch}.versionRelease}"}/summary.txt

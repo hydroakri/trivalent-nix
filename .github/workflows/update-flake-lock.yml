@@ -78,6 +78,18 @@ jobs:
             echo "::error::unexpected working-tree changes after nix flake update"
             git checkout -- . ; exit 1
           fi
+          # Formatter drift is not a regression in THIS repo: a bumped
+          # treefmt-nix/nixpkgs can change what shfmt/nixfmt emit (it did: the
+          # shfmt default indent flipped to tabs and red-lined this job for days).
+          # Re-format with the NEW formatter and let the PR carry the whitespace
+          # change; CI still gates the result. Allow-list: *.nix / *.sh only, and
+          # never the trust anchors -- anything else aborts for a human.
+          nix fmt
+          if git status --porcelain | grep -vE '^ M (flake\.lock|.*\.(nix|sh))$' \
+            || git status --porcelain | grep -E '^ M (pins\.nix|verify/logs/|verify/repodata/)'; then
+            echo "::error::formatter touched files outside its allow-list"
+            git checkout -- . ; exit 1
+          fi
           nix flake check --print-build-logs
           nix build .#trivalent --print-build-logs
 
@@ -88,12 +100,19 @@ jobs:
           BR="bot/flake-lock-$(date +%Y%m%d)"
           git push origin --delete "$BR" 2>/dev/null || true
           git checkout -B "$BR"
-          git add flake.lock
-          git commit -m "flake.lock: update"
+          git add -u   # flake.lock + anything `nix fmt` re-formatted (allow-listed above)
+          if git diff --cached --name-only | grep -qvx flake.lock; then
+            msg="flake.lock: update (+ reformat for updated formatters)"
+            note=" Also re-formatted with the updated formatters (whitespace only): $(git diff --cached --name-only | grep -vx flake.lock | tr '\n' ' ')"
+          else
+            msg="flake.lock: update"
+            note=""
+          fi
+          git commit -m "$msg"
           git push -u origin "$BR"
-          PR="$(gh pr create --base main --head "$BR" --title "flake.lock: update" \
+          PR="$(gh pr create --base main --head "$BR" --title "$msg" \
             --label automated --label dependencies \
-            --body "Passed \`nix flake check\` + \`nix build .#trivalent\` (drift installCheckPhase).")"
+            --body "Passed \`nix flake check\` + \`nix build .#trivalent\` (drift installCheckPhase).$note")"
           echo "pr_number=$(gh pr view "$PR" --json number --jq .number)" >> "$GITHUB_OUTPUT"
           echo "branch=$BR" >> "$GITHUB_OUTPUT"
 
@@ -115,3 +134,27 @@ jobs:
             git push origin --delete "$BR" 2>/dev/null || true
             exit 1
           fi
+
+      # A red scheduled run used to be invisible: the lock silently stopped
+      # moving for 5 days. Open (or update) ONE issue while it keeps failing and
+      # close it when a lock bump merges again.
+      - name: Alert -- update-flake-lock is failing
+        if: failure()
+        run: |
+          title="update-flake-lock is failing"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          num="$(gh issue list --state open --label blocked --search "in:title \"$title\"" --json number --jq '.[0].number')"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "Still failing on $(date -u +%FT%TZ): $url"
+          else
+            gh issue create --title "$title" --label blocked \
+              --body "The scheduled flake.lock update failed, so main's flake.lock is not moving. Run: $url"
+          fi
+
+      - name: Clear alert -- a lock bump merged
+        if: success() && steps.pr.outputs.pr_number != ''
+        run: |
+          title="update-flake-lock is failing"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          num="$(gh issue list --state open --label blocked --search "in:title \"$title\"" --json number --jq '.[0].number')"
+          [ -z "$num" ] || gh issue close "$num" --comment "Recovered: a flake.lock update merged ($url)."
