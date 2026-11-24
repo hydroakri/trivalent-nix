@@ -13,6 +13,8 @@
 #                     (secureblue publishes x86_64 and aarch64 as SEPARATE,
 #                     alternating release tags -- Path B must be arch-scoped or
 #                     it will read the other arch's newer tag as a false lag.)
+#   Tag naming      : upstream tags are <v-r>-<arch> since 2026-10 (bare <v-r>
+#                     before); verify/lib/release-tag.sh resolves both.
 #   Existence check : the release named <A> must exist AND its provenance must
 #                     carry trivalent-<A>.<arch>.rpm. Path B never trusts Path
 #                     A's string beyond looking it up.
@@ -41,6 +43,8 @@
 NEED_TOOLS="curl gh jq xmllint gzip zstd"
 # shellcheck source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
+# shellcheck source=lib/release-tag.sh
+. "$VERIFY_DIR/lib/release-tag.sh"
 
 arch="${1:-}"
 case "$arch" in
@@ -50,7 +54,6 @@ esac
 
 VMAP_RETRIES="${VMAP_RETRIES:-12}"
 VMAP_INTERVAL="${VMAP_INTERVAL:-300}"
-VR_RE='^[0-9]+(\.[0-9]+){3}-[0-9]+$'
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -73,38 +76,50 @@ path_a() { # -> echoes v-r  ; exit 22 on parse failure
   printf '%s' "$row" | cut -f1
 }
 
-# subjects of a release's SLSA provenance, one per line ("" if no such asset)
+# subjects of a release's SLSA provenance, one per line ("" if no such asset).
+# Reads either asset name (multiple.intoto.jsonl until 2026-10, provenance.intoto.json
+# since) -- both are a DSSE envelope with the statement in .dsseEnvelope.payload.
+# This only LISTS what a release claims, for the A-vs-B cross-check; whether the
+# provenance is trustworthy is decided by layer 3 of 10-verify, not here.
 prov_subjects() { # <tag>
-  local f="$work/prov-$1.jsonl"
-  [ -f "$f" ] || gh release download "$1" --repo "$TRIVALENT_GH_REPO" \
-    --pattern 'multiple.intoto.jsonl' --dir "$work" --clobber 2>/dev/null &&
-    mv -f "$work/multiple.intoto.jsonl" "$f" 2>/dev/null || true
-  [ -s "$f" ] || return 0
-  jq -r '.dsseEnvelope.payload | @base64d | fromjson | .subject[].name' "$f" 2>/dev/null || true
+  local d="$work/prov-$1" f
+  if [ ! -d "$d" ]; then
+    mkdir -p "$d"
+    gh release download "$1" --repo "$TRIVALENT_GH_REPO" \
+      --pattern 'multiple.intoto.jsonl' --pattern 'provenance.intoto.json' \
+      --dir "$d" --clobber >/dev/null 2>&1 || true
+  fi
+  for f in "$d/multiple.intoto.jsonl" "$d/provenance.intoto.json"; do
+    [ -s "$f" ] || continue
+    jq -r '.dsseEnvelope.payload | @base64d | fromjson | .subject[].name' "$f" 2>/dev/null || true
+  done
 }
 
 # does <tag>'s provenance attest the trivalent RPM for THIS arch?
 prov_has_arch() { # <tag>
-  prov_subjects "$1" | grep -qx "trivalent-$1.$arch.rpm"
+  local vr
+  vr="$(release_tag_vr "$1" "$arch")" || return 1
+  prov_subjects "$1" | grep -qx "trivalent-$vr.$arch.rpm"
 }
 
-path_b() { # -> echoes newest GH release tag whose provenance is for $arch ; exit 22
-  local tags t
+path_b() { # -> echoes the v-r of the newest GH release whose provenance is for $arch ; exit 22
+  local tags vr t
   tags="$(gh release list --repo "$TRIVALENT_GH_REPO" --limit 100 \
     --json tagName --jq '.[].tagName' 2>/dev/null)" ||
     die "Path B: gh release list failed" 22
-  for t in $(printf '%s\n' "$tags" | grep -E "$VR_RE" | sort -Vr); do
+  # "<v-r> <tag>" for every tag that is a v-r for THIS arch (old bare scheme or
+  # new <v-r>-<arch>; the other arch's suffixed tags are skipped), newest first
+  while read -r vr t; do
     if prov_has_arch "$t"; then
-      printf '%s' "$t"
+      printf '%s' "$vr"
       return 0
     fi
-  done
+  done < <(
+    for t in $tags; do
+      vr="$(release_tag_vr "$t" "$arch")" && printf '%s %s\n' "$vr" "$t"
+    done | sort -k1,1Vr
+  )
   die "Path B: no release provenance carries trivalent-*.$arch.rpm" 22
-}
-
-tag_exists() { # <tag> : release exists AND its provenance is for $arch
-  gh release view "$1" --repo "$TRIVALENT_GH_REPO" --json tagName >/dev/null 2>&1 &&
-    prov_has_arch "$1"
 }
 
 older() { # older <x> <y> : true if x strictly older than y
@@ -122,18 +137,18 @@ while :; do
   log "Path A (repomd)      : $A"
   log "Path B (github newest): $B"
 
-  if ! gh release view "$A" --repo "$TRIVALENT_GH_REPO" --json tagName >/dev/null 2>&1; then
+  if ! T="$(release_resolve_tag "$A" "$arch" "$TRIVALENT_GH_REPO")"; then
     # repodata names a version with NO GitHub release. Hand it to the caller
     # with the signed repodata's own timestamp -- benign "release in flight"
     # vs tampering is decided against the RPM's signatures + a grace window.
     rev="$(xmllint --xpath 'string(//*[local-name()="revision"])' "$work/repomd.xml" 2>/dev/null)"
-    printf 'PENDING: repodata advertises trivalent %s; GitHub has no release tagged %s yet.\n' "$A" "$A" >&2
+    printf 'PENDING: repodata advertises trivalent %s; GitHub has no release tagged %s or %s yet.\n' "$A" "$A-$arch" "$A" >&2
     echo "VERSION=$A"
     echo "REPOMD_REVISION=${rev:-0}"
     exit 23
   fi
-  if ! prov_has_arch "$A"; then
-    printf 'ALARM: GitHub release %s exists but its SLSA provenance does not attest trivalent-%s.%s.rpm.\n' "$A" "$A" "$arch" >&2
+  if ! prov_has_arch "$T"; then
+    printf 'ALARM: GitHub release %s exists but its SLSA provenance does not attest trivalent-%s.%s.rpm.\n' "$T" "$A" "$arch" >&2
     printf '       repodata and the published provenance disagree about what was built for %s.\n' "$arch" >&2
     exit 20
   fi

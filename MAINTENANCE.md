@@ -242,3 +242,5 @@ Two things changed under us when `nix flake update` pulled a newer rpm / treefmt
 - **Formatter defaults** (treefmt-nix's shfmt default indent flipped to tabs). `flake.nix` pins `shfmt.indent_size = 2`. If a bumped formatter still disagrees, `update-flake-lock` runs `nix fmt` and the bot PR carries the whitespace change (allow-list: `*.nix` / `*.sh`, never `pins.nix`, `verify/logs/`, `verify/repodata/`; anything else aborts for a human).
 
 If `update-flake-lock` fails anyway, it opens (and keeps commenting on) one `blocked` issue titled "update-flake-lock is failing", and closes it when a lock bump merges again.
+
+- **Upstream release tags** (`<v-r>` until 2026-10, `<v-r>-<arch>` since). Resolved in one place, `verify/lib/release-tag.sh`, pinned by `checks.*.release-tag`. Before this was fixed the updater looked up the bare `<v-r>`, found nothing, read that as "release still in flight" and silently no-op'd for six weeks while the `release overdue` notices piled up -- if those notices ever pile up again, suspect a naming/format change before suspecting a slow upstream.

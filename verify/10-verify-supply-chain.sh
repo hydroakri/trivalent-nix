@@ -35,6 +35,8 @@ NEED_TOOLS="curl gpg gh jq xmllint rpmkeys slsa-verifier sha256sum gzip zstd"
 . "$(dirname "$0")/lib/common.sh"
 # shellcheck source=lib/rpm-sig.sh
 . "$VERIFY_DIR/lib/rpm-sig.sh"
+# shellcheck source=lib/release-tag.sh
+. "$VERIFY_DIR/lib/release-tag.sh"
 
 VR="${1:-}"
 ARCH="${2:-}"
@@ -185,11 +187,13 @@ L3CODE=13
 set +e
 {
   echo "== layer 3: SLSA provenance =="
-  assets="$(gh release view "$VR" --repo "$TRIVALENT_GH_REPO" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-  echo "release $VR assets:"
+  # upstream tags are <v-r>-<arch> since 2026-10 (bare <v-r> before): verify/lib/release-tag.sh
+  TAG="$(release_resolve_tag "$VR" "$ARCH" "$TRIVALENT_GH_REPO")" || TAG="$VR"
+  assets="$(gh release view "$TAG" --repo "$TRIVALENT_GH_REPO" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+  echo "release $TAG (for $VR) assets:"
   printf '  %s\n' $assets
   if printf '%s\n' $assets | grep -qx 'multiple.intoto.jsonl'; then
-    gh release download "$VR" --repo "$TRIVALENT_GH_REPO" --pattern 'multiple.intoto.jsonl' --dir "$work" --clobber
+    gh release download "$TAG" --repo "$TRIVALENT_GH_REPO" --pattern 'multiple.intoto.jsonl' --dir "$work" --clobber
     echo "-- slsa-verifier verify-artifact"
     slsa-verifier verify-artifact "$RPM_IN" \
       --provenance-path "$work/multiple.intoto.jsonl" \
@@ -205,14 +209,14 @@ set +e
       echo "FAIL: provenance did not verify"
       L3CODE=13
     fi
-  elif printf '%s\n' $assets | grep -qE '\.(intoto\.jsonl|sigstore|sigstore\.json|att|bundle)$' ||
+  elif printf '%s\n' $assets | grep -qE '\.(intoto\.jsonl?|sigstore|sigstore\.json|att|bundle)$' ||
     gh api "repos/$TRIVALENT_GH_REPO/attestations/sha256:$RPM_SHA256" >/dev/null 2>&1; then
     echo "FAIL: 'multiple.intoto.jsonl' is absent but another attestation form is present."
     echo "      This is F2 (provenance format change), NOT missing provenance."
     echo "      The verifier must be updated deliberately; refusing to pass."
     L3CODE=30
   else
-    echo "FAIL: no provenance of any kind for release $VR."
+    echo "FAIL: no provenance of any kind for release $TAG."
     L3CODE=31
   fi
 } >"$LOGDIR/layer3.txt" 2>&1
@@ -260,7 +264,7 @@ if [ "$L1" -eq 0 ] && [ "$L2" -eq 0 ] && [ "$L3" -eq 0 ]; then
     rpmUrl = "$SECUREBLUE_REPO_BASEURL/${RPM_LOC:-Packages/trivalent-$VR.$ARCH.rpm}";
     rpmHash = "$(sri "$RPM_SHA256")";
     rpmSha256 = "$RPM_SHA256";
-    intotoUrl = "https://github.com/$TRIVALENT_GH_REPO/releases/download/$VR/multiple.intoto.jsonl";
+    intotoUrl = "https://github.com/$TRIVALENT_GH_REPO/releases/download/$TAG/multiple.intoto.jsonl";
     intotoHash = "$(sri "$(sha256sum "$work/multiple.intoto.jsonl" | cut -d' ' -f1)")";
 --- keyHash (constant, only if it changed): $(sri "$(sha256sum "$work/key.gpg" | cut -d' ' -f1)") ---
 EOF

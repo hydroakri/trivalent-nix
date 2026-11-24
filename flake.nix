@@ -179,6 +179,23 @@
                 bash ${./verify/lib/rpm-sig-test.sh} v
                 touch $out
               '';
+          # contract test for how a v-r maps to an upstream release tag (bare
+          # <v-r> before 2026-10, <v-r>-<arch> since) -- verify/lib/release-tag.sh
+          release-tag =
+            pkgs.runCommand "release-tag"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.gnugrep
+                  pkgs.coreutils
+                ];
+              }
+              ''
+                mkdir -p v/lib
+                cp ${./verify/lib/release-tag.sh} v/lib/release-tag.sh
+                bash ${./verify/lib/release-tag-test.sh} v
+                touch $out
+              '';
           # cheap eval-only gate: the pinned SRI is well-formed and the log exists
           pin-log-present = pkgs.runCommand "pin-log-present" { } ''
             test -f ${./verify/logs + "/${pins.${arch}.versionRelease}"}/summary.txt
