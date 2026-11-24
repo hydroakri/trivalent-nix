@@ -1,0 +1,6 @@
+/nix/store/x-trivalent.rpm:
+    Header V4 EdDSA/SHA512 Signature, key ID f47b3e41: OK
+    Header SHA256 digest: OK
+    Header SHA1 digest: OK
+    Payload SHA256 digest: OK
+    MD5 digest: OK

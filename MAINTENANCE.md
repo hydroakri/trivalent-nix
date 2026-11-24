@@ -231,3 +231,14 @@ never writes a fingerprint), independently confirm >= 2 channels agree on the
 new value, then hand-edit `verify/fingerprint.env` + `pins.nix` `keyHash` +
 add a `KEY-PROVENANCE.md` row with your name. `40-review.sh` R1/R4 block a
 fingerprint or trusted-root value in git history with no matching row.
+
+---
+
+## Tool-output and formatter drift (red `update-flake-lock`)
+
+Two things changed under us when `nix flake update` pulled a newer rpm / treefmt-nix, and both turned the scheduled job red. They are now guarded structurally:
+
+- **`rpmkeys -Kv` text format** (rpm 6 prints `key fingerprint: <fpr>: OK`, older rpm `key ID <id>: OK`). The format is parsed in exactly one file, `verify/lib/rpm-sig.sh`, shared by `lib/verify.nix` and `verify/10-verify-supply-chain.sh`, and pinned by recorded outputs in `verify/testdata/rpmkeys/` (`checks.*.rpm-sig-parser`). If a future rpm phrases it differently, `nix flake check` fails in the update PR and the layer-1 log says so: add the new output as `ok-<what>.txt`, widen `rpm-sig.sh`, never loosen it past `reject-*.txt`. An unrecognised format fails closed.
+- **Formatter defaults** (treefmt-nix's shfmt default indent flipped to tabs). `flake.nix` pins `shfmt.indent_size = 2`. If a bumped formatter still disagrees, `update-flake-lock` runs `nix fmt` and the bot PR carries the whitespace change (allow-list: `*.nix` / `*.sh`, never `pins.nix`, `verify/logs/`, `verify/repodata/`; anything else aborts for a human).
+
+If `update-flake-lock` fails anyway, it opens (and keeps commenting on) one `blocked` issue titled "update-flake-lock is failing", and closes it when a lock bump merges again.

@@ -33,6 +33,8 @@
 NEED_TOOLS="curl gpg gh jq xmllint rpmkeys slsa-verifier sha256sum gzip zstd"
 # shellcheck source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
+# shellcheck source=lib/rpm-sig.sh
+. "$VERIFY_DIR/lib/rpm-sig.sh"
 
 VR="${1:-}"
 ARCH="${2:-}"
@@ -149,12 +151,10 @@ set +e
   rk_rc=$?
   cat "$work/rk.out"
   echo "rpmkeys rc=$rk_rc"
-  # rpm-sequoia prints the short (32-bit) key id: "...Signature, key ID f47b3e41: OK"
-  # older rpm prints 64-bit; match KEYID8 as a suffix of the hex token before ": OK".
-  ok_sig="$(grep -Ei "signature,? +key (id|fingerprint):? +[0-9a-f]*${KEYID8}: ok" "$work/rk.out" || true)"
-  # any digest/signature line reported BAD, or the key not present (NOKEY).
-  # ("RSA/DSA signature: NOTFOUND" is normal for an EdDSA-only rpm -- not a failure.)
-  bad="$(grep -Ei ': (nokey|bad)( |$|\()' "$work/rk.out" || true)"
+  # the rpmkeys text format is parsed in ONE place (shared with lib/verify.nix,
+  # pinned by fixtures in verify/testdata/rpmkeys/): verify/lib/rpm-sig.sh
+  ok_sig="$(rpm_sig_ok_lines "$work/rk.out" "$KEYID8")"
+  bad="$(rpm_sig_bad_lines "$work/rk.out")"
   echo "matched OK sig lines : ${ok_sig:-<none>}"
   echo "bad / nokey lines    : ${bad:-<none>}"
   if [ "$rk_rc" -eq 0 ] && [ -n "$ok_sig" ] && [ -z "$bad" ]; then
@@ -162,6 +162,11 @@ set +e
     L1=0
   else
     echo "FAIL: rpm body not verifiably signed by ...$KEYID8"
+    if [ "$rk_rc" -eq 0 ] && [ -z "$ok_sig" ] && [ -z "$bad" ]; then
+      echo "NOTE: rpmkeys exited 0 with no BAD/NOKEY line but no recognised OK signature line."
+      echo "      rpm's output format has probably changed: add the output above as"
+      echo "      verify/testdata/rpmkeys/ok-<what>.txt and widen verify/lib/rpm-sig.sh."
+    fi
   fi
 } >"$LOGDIR/layer1.txt" 2>&1
 set -e

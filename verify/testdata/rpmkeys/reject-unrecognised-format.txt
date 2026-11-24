@@ -1,0 +1,7 @@
+# A hypothetical future rpm phrasing nobody has taught the parser yet. It must
+# FAIL CLOSED (no ok-line) rather than pass: the fix is to add an ok-*.txt
+# fixture for the real output and widen verify/lib/rpm-sig.sh.
+/nix/store/x-trivalent.rpm:
+    Header: verified, signer=f47b3e41
+    Header SHA256 digest: OK
+    Payload SHA256 digest: OK

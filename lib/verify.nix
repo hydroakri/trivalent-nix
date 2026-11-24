@@ -91,9 +91,12 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
     rpmkeys --dbpath "$PWD/rpmdb" --import ${key}
     rpmkeys --dbpath "$PWD/rpmdb" -Kv ${rpmFile} > l1 || true
     cat l1
-    grep -Eqi "signature,? +key (id|fingerprint):? +[0-9a-f]*$fprShort: ok" l1 \
-      || fail "layer1: no OK signature from key ...$fprShort"
-    ! grep -Eqi ': (nokey|bad)( |$|\()' l1 || fail "layer1: a digest/signature reported BAD/NOKEY"
+    # the rpmkeys text format is parsed in ONE place, shared with
+    # verify/10-verify-supply-chain.sh and pinned by fixtures (checks.*.rpm-sig-parser)
+    . ${../verify/lib/rpm-sig.sh}
+    [ -n "$(rpm_sig_ok_lines l1 "$fprShort")" ] \
+      || fail "layer1: no OK signature from key ...$fprShort (if rpmkeys output looks fine above, rpm's format changed: see verify/lib/rpm-sig.sh)"
+    [ -z "$(rpm_sig_bad_lines l1)" ] || fail "layer1: a digest/signature reported BAD/NOKEY"
     echo "layer 1 OK"
 
     echo "== layer 2: signed repodata + primary tie =="

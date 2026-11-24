@@ -1,0 +1,4 @@
+/nix/store/x-trivalent.rpm:
+    Header OpenPGP V4 EdDSA/SHA512 signature, key fingerprint: 26b4463ed8f313bc7e3fbdf9d9223af0f47b3e41: OK
+    Header SHA256 digest: OK
+    Payload SHA256 digest: OK
