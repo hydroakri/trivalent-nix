@@ -92,7 +92,7 @@
               jq
               libxml2 # xmllint -- repodata parsing in verify/10 + verify/20
               rpm
-              slsa-verifier
+              cosign
               cpio
               gzip
               zstd
@@ -243,7 +243,7 @@
                   }
                 }
 
-                # 5 surgical rewrites so the vendor script runs in a build
+                # 4 surgical rewrites so the vendor script runs in a build
                 # sandbox; every target line is unrelated to LD_* / ld.so.preload.
                 anchor '^exec bwrap '                 'exec bwrap line'
                 sed -i 's#^exec bwrap #exec "$SCRUB_SHIM" #' "$work"
@@ -251,8 +251,11 @@
                 anchor 'PATH="/usr/bin:/bin"'         'PATH reset'
                 sed -i "s#PATH=\"/usr/bin:/bin\"#PATH=\"$PATH\"#" "$work"
 
-                anchor '/var/tmp/'                    'hardcoded /var/tmp cache'
-                sed -i "s#/var/tmp/#$TMPDIR/vtmp/#g" "$work"
+                # Chromium 158: the cache moved from a hardcoded /var/tmp/ to
+                # "''${HOME}/.cache/" (HOME is $TMPDIR/home below, so it is already
+                # sandbox-safe). Anchor on that so a silent relocation to an
+                # unwritable path is still caught instead of failing opaquely.
+                anchor 'TMPFS_CACHE_DIR="\$\{HOME\}/\.cache/' 'HOME-based cache dir'
 
                 anchor '"\$\(id -u\)" -eq 0'          'refuse-root guard'
                 sed -i 's#"\$(id -u)" -eq 0#"$(id -u)" -eq 999999#' "$work"

@@ -106,7 +106,7 @@ a real kernel). Exit codes are the judgement:
 
 | script | does | key exit codes |
 |---|---|---|
-| `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the 3 layers **plus** a live `slsa-verifier` Sigstore/Rekor lookup; prints a ready-to-paste `pins.nix` block | `0` PASS · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
+| `10-verify-supply-chain.sh <v-r> <arch> [rpm]` | the 3 layers **plus** layer 3 via cosign against the vendored Sigstore root (live fetch of the release provenance); prints a ready-to-paste `pins.nix` block | `0` PASS · `11/12/13` layer 1/2/3 · `30` provenance format changed (F2) · `31` missing · `40` key mismatch |
 | `20-version-map.sh <arch>` | derive "current version" from repodata **and** GitHub independently, classify disagreement | `0` match (`VERSION=`) · `10`/`21` repodata lag · `20` repodata ahead / tag absent (F3) · `22` unparseable |
 | `00-bootstrap-key.sh` | acquire the key from **two independent channels**, check both vs `fingerprint.env`, append a `KEY-PROVENANCE.md` row | `0` ok · `40` mismatch, writes nothing (F1) · `41` network |
 | `30-sandbox-selfcheck.sh [url]` | strace wrapped **and** unwrapped browser on a real URL: userns + seccomp-bpf, no setuid path, sets match, DOM non-empty, `LD_PRELOAD` sentinel never reaches the browser | `0` ok · `50` sandbox inadequate · `52` empty DOM · `53` wrapped≠unwrapped · `55` preload reached the browser |

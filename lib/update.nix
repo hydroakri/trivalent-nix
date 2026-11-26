@@ -54,7 +54,7 @@
   coreutils,
   git,
   cacert,
-  slsa-verifier,
+  cosign,
   nix,
   nixfmt,
 }:
@@ -81,7 +81,7 @@ writeShellApplication {
     coreutils
     git
     cacert
-    slsa-verifier
+    cosign
     nix
     nixfmt
   ];
@@ -295,7 +295,7 @@ writeShellApplication {
       fi
       say "$ARCH: candidate $PINNED_VR -> $CAND"
 
-      # verify (live: 3 layers + slsa-verifier Sigstore/Rekor)
+      # verify (live: 3 layers, layer 3 via cosign + statement policy)
       set +e
       v_out="$(./verify/10-verify-supply-chain.sh "$CAND" "$ARCH" 2>&1)"
       v_rc=$?
@@ -387,7 +387,7 @@ writeShellApplication {
       --arg old "''${OLD[x86_64]}" --arg new "''${NEW[x86_64]}" \
       --argjson files "$(printf '%s\n' "''${LOGFILES[@]}" | jq -R . | jq -s 'unique')" \
       --arg msg "$MSG" \
-      --arg body "per-arch: layers 1+2+3 PASS (live slsa-verifier + offline cosign) -- key $FPR. aarch64 build/sandbox gated by ci-aarch64." \
+      --arg body "per-arch: layers 1+2+3 PASS (cosign) -- key $FPR. aarch64 build/sandbox gated by ci-aarch64." \
       '[{attrPath:"trivalent", oldVersion:$old, newVersion:$new, files:$files,
          commitMessage:$msg, commitBody:$body}]'
     say "done: $MSG"
