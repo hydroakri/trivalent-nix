@@ -46,7 +46,7 @@ let
   repomd = ../verify/repodata/repomd.xml;
   repomdAsc = ../verify/repodata/repomd.xml.asc;
   primary = ../verify/repodata/primary.xml.zst;
-  intoto = f "multiple.intoto.jsonl" pin.intotoUrl pin.intotoHash;
+  intoto = f "provenance.intoto" pin.intotoUrl pin.intotoHash;
   trustedRoot = ../verify/sigstore-trusted-root.json;
 in
 runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
@@ -64,6 +64,7 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
     inherit (anchors)
       fpr
       fprShort
+      slsaSignerId
       slsaBuilderId
       slsaSourceUri
       slsaSourceBranch
@@ -126,43 +127,28 @@ runCommand "trivalent-${pin.versionRelease}-${arch}-verified"
     got_tr="$(sha256sum ${trustedRoot} | cut -d' ' -f1)"
     [ "$got_tr" = "$trHash" ] || fail "layer3: sigstore-trusted-root.json sha256 $got_tr != pinned $trHash (see MAINTENANCE.md)"
 
-    # regex-escape the builder id for --certificate-identity-regexp
-    bid_re="$(printf '%s' "$slsaBuilderId" | sed 's/[.[\*^$()+?{|]/\\&/g')"
-    # --digest/--digestAlg instead of passing $rpmFile as the blob: cosign reads
-    # a blob argument through an OCI-layer code path with a hardcoded 128MiB cap
+    # the provenance formats (v0.2 / v1) and their anchors live in ONE place,
+    # shared with verify/10-verify-supply-chain.sh: verify/lib/provenance.sh.
+    # --digest instead of passing $rpmFile as the blob: cosign reads a blob
+    # argument through an OCI-layer code path with a hardcoded 128MiB cap
     # ("size of layer (N) exceeded the limit (134217728)"), which the aarch64
-    # RPM cleared at Chromium 153. We already have rpmSha (bound to this RPM by
-    # layers 1+2 above); --check-claims=true (the default) verifies it against
-    # the in-toto subject exactly as it would from re-hashing the file.
-    cosign verify-blob-attestation \
-      --bundle ${intoto} \
-      --trusted-root ${trustedRoot} \
-      --certificate-identity-regexp "^''${bid_re}\$" \
-      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-      --type slsaprovenance \
-      --digest "$rpmSha" --digestAlg sha256 2>&1 | tee l3
-    grep -q '^Verified OK$' l3 || fail "layer3: cosign did not print 'Verified OK'"
+    # RPM cleared at Chromium 153. rpmSha is bound to this RPM by layers 1+2.
+    . ${../verify/lib/provenance.sh}
+    prov_verify_bundle ${intoto} ${trustedRoot} "$rpmSha" "$slsaSignerId" "$slsaBuilderId" \
+      "$slsaSourceUri" "$slsaSourceBranch" > l3 2>&1 || { cat l3; fail "layer3: cosign did not print 'Verified OK'"; }
+    cat l3
 
     # policy on the (now cryptographically trusted) statement
     jq -r '.dsseEnvelope.payload' ${intoto} | base64 -d > statement.json
-    exp_uri="git+https://''${slsaSourceUri}@refs/heads/''${slsaSourceBranch}"
-    jq -e --arg n "trivalent-$vr.$arch.rpm" --arg h "$rpmSha" \
-      '.subject[] | select(.name==$n) | .digest.sha256==$h' statement.json >/dev/null \
-      || fail "layer3: no subject trivalent-$vr.$arch.rpm with digest $rpmSha"
-    jq -e --arg b "$slsaBuilderId" '.predicate.builder.id==$b' statement.json >/dev/null \
-      || fail "layer3: predicate.builder.id != $slsaBuilderId"
-    jq -e --arg u "$exp_uri" '.predicate.invocation.configSource.uri==$u' statement.json >/dev/null \
-      || fail "layer3: configSource.uri != $exp_uri"
-    jq -e --arg e ".github/workflows/build_$arch.yml" \
-      '.predicate.invocation.configSource.entryPoint==$e' statement.json >/dev/null \
-      || fail "layer3: configSource.entryPoint != build_$arch.yml"
+    msg="$(prov_policy statement.json "$arch" "$vr" "$rpmSha" "$slsaBuilderId" \
+      "$slsaSourceUri" "$slsaSourceBranch")" || fail "layer3: $msg"
     echo "layer 3 OK (Sigstore chain verified offline; statement bound to this RPM + builder)"
 
     mkdir -p "$out"
     cp ${rpmFile} "$out/trivalent.rpm"
     { cat "$hdrPath"; echo; echo "version-release : $vr"; echo "arch            : $arch";
       echo "rpm sha256      : $rpmSha"; echo "signing key     : $fpr";
-      echo "slsa builder    : $slsaBuilderId";
+      echo "slsa signer     : $slsaSignerId";
       echo "sigstore root   : $trHash"; echo;
       echo "RESULT: PASS (layers 1+2+3, fully offline)"; } > "$out/supply-chain.log"
     cat log >> "$out/supply-chain.log"

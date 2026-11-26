@@ -13,15 +13,16 @@
 #   layer 1  rpm package body signature   (rpmkeys -Kv against a temp rpmdb)
 #   layer 2  repodata detached signature  (gpg --verify repomd.xml.asc) + bind the
 #            RPM's sha256 to the <checksum> in the signed primary.xml
-#   layer 3  SLSA provenance              (slsa-verifier verify-artifact, builder
-#            + source-uri + source-branch all pinned)
+#   layer 3  SLSA provenance              (cosign verify-blob-attestation vs the
+#            vendored Sigstore root, then policy on the statement; formats and
+#            anchors: verify/lib/provenance.sh)
 #
 # Exit codes:
 #   0    RESULT: PASS
 #   11   layer 1 failed
 #   12   layer 2 failed
 #   13   layer 3 failed (provenance present but did not verify)
-#   30   layer 3: provenance FORMAT CHANGED -- .intoto.jsonl gone but some other
+#   30   layer 3: provenance FORMAT CHANGED -- no known provenance asset but some other
 #        attestation exists. Distinct from "missing" on purpose (failure mode F2).
 #   31   layer 3: provenance MISSING -- no attestation of any kind.
 #   40   key material did not match SECUREBLUE_FPR / SECUREBLUE_GPG_SHA256
@@ -30,13 +31,15 @@
 # On any outcome, verify/logs/<version-release>/ is written and is meant to be
 # copied verbatim into the package $out (see lib/mk-trivalent.nix).
 
-NEED_TOOLS="curl gpg gh jq xmllint rpmkeys slsa-verifier sha256sum gzip zstd"
+NEED_TOOLS="curl gpg gh jq xmllint rpmkeys cosign sha256sum gzip zstd"
 # shellcheck source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
 # shellcheck source=lib/rpm-sig.sh
 . "$VERIFY_DIR/lib/rpm-sig.sh"
 # shellcheck source=lib/release-tag.sh
 . "$VERIFY_DIR/lib/release-tag.sh"
+# shellcheck source=lib/provenance.sh
+. "$VERIFY_DIR/lib/provenance.sh"
 
 VR="${1:-}"
 ARCH="${2:-}"
@@ -192,17 +195,27 @@ set +e
   assets="$(gh release view "$TAG" --repo "$TRIVALENT_GH_REPO" --json assets --jq '.assets[].name' 2>/dev/null || true)"
   echo "release $TAG (for $VR) assets:"
   printf '  %s\n' $assets
-  if printf '%s\n' $assets | grep -qx 'multiple.intoto.jsonl'; then
-    gh release download "$TAG" --repo "$TRIVALENT_GH_REPO" --pattern 'multiple.intoto.jsonl' --dir "$work" --clobber
-    echo "-- slsa-verifier verify-artifact"
-    slsa-verifier verify-artifact "$RPM_IN" \
-      --provenance-path "$work/multiple.intoto.jsonl" \
-      --source-uri "$SLSA_SOURCE_URI" \
-      --source-branch "$SLSA_SOURCE_BRANCH" \
-      --builder-id "$SLSA_BUILDER_ID"
-    sv_rc=$?
-    echo "slsa-verifier rc=$sv_rc"
-    if [ $sv_rc -eq 0 ]; then
+  PROV=""
+  for cand in provenance.intoto.json multiple.intoto.jsonl; do
+    if printf '%s\n' $assets | grep -qx "$cand"; then
+      PROV="$cand"
+      break
+    fi
+  done
+  if [ -n "$PROV" ]; then
+    gh release download "$TAG" --repo "$TRIVALENT_GH_REPO" --pattern "$PROV" --dir "$work" --clobber
+    echo "-- cosign verify-blob-attestation ($PROV, offline vs verify/sigstore-trusted-root.json)"
+    prov_rc=0
+    prov_verify_bundle "$work/$PROV" "$VERIFY_DIR/sigstore-trusted-root.json" "$RPM_SHA256" \
+      "$SLSA_SIGNER_ID" "$SLSA_BUILDER_ID" "$SLSA_SOURCE_URI" "$SLSA_SOURCE_BRANCH" || prov_rc=$?
+    if [ $prov_rc -eq 0 ]; then
+      jq -r '.dsseEnvelope.payload' "$work/$PROV" | base64 -d >"$work/statement.json"
+      prov_msg="$(prov_policy "$work/statement.json" "$ARCH" "$VR" "$RPM_SHA256" "$SLSA_BUILDER_ID" \
+        "$SLSA_SOURCE_URI" "$SLSA_SOURCE_BRANCH")" || prov_rc=$?
+      [ $prov_rc -eq 0 ] || echo "policy: $prov_msg"
+    fi
+    echo "provenance rc=$prov_rc"
+    if [ $prov_rc -eq 0 ]; then
       echo "OK: layer 3 verified"
       L3=0
     else
@@ -211,7 +224,7 @@ set +e
     fi
   elif printf '%s\n' $assets | grep -qE '\.(intoto\.jsonl?|sigstore|sigstore\.json|att|bundle)$' ||
     gh api "repos/$TRIVALENT_GH_REPO/attestations/sha256:$RPM_SHA256" >/dev/null 2>&1; then
-    echo "FAIL: 'multiple.intoto.jsonl' is absent but another attestation form is present."
+    echo "FAIL: no known provenance asset (provenance.intoto.json / multiple.intoto.jsonl) but another attestation form is present."
     echo "      This is F2 (provenance format change), NOT missing provenance."
     echo "      The verifier must be updated deliberately; refusing to pass."
     L3CODE=30
@@ -232,7 +245,7 @@ RESULT="FAIL"
   echo "rpm sha256      : $RPM_SHA256"
   echo "repodata sha256 : ${REPODATA_SHA256:-<layer2 failed>}"
   echo "signing key fpr : $key_fpr  (pinned $SECUREBLUE_FPR)"
-  echo "slsa builder    : $SLSA_BUILDER_ID"
+  echo "slsa signer     : $SLSA_SIGNER_ID"
   echo "layer 1 (rpm sig)      exit: $([ "$L1" -eq 0 ] && echo 0 || echo 11)"
   echo "layer 2 (repodata sig) exit: $([ "$L2" -eq 0 ] && echo 0 || echo 12)"
   echo "layer 3 (provenance)   exit: $([ "$L3" -eq 0 ] && echo 0 || echo "$L3CODE")"
@@ -264,8 +277,8 @@ if [ "$L1" -eq 0 ] && [ "$L2" -eq 0 ] && [ "$L3" -eq 0 ]; then
     rpmUrl = "$SECUREBLUE_REPO_BASEURL/${RPM_LOC:-Packages/trivalent-$VR.$ARCH.rpm}";
     rpmHash = "$(sri "$RPM_SHA256")";
     rpmSha256 = "$RPM_SHA256";
-    intotoUrl = "https://github.com/$TRIVALENT_GH_REPO/releases/download/$TAG/multiple.intoto.jsonl";
-    intotoHash = "$(sri "$(sha256sum "$work/multiple.intoto.jsonl" | cut -d' ' -f1)")";
+    intotoUrl = "https://github.com/$TRIVALENT_GH_REPO/releases/download/$TAG/$PROV";
+    intotoHash = "$(sri "$(sha256sum "$work/$PROV" | cut -d' ' -f1)")";
 --- keyHash (constant, only if it changed): $(sri "$(sha256sum "$work/key.gpg" | cut -d' ' -f1)") ---
 EOF
   exit 0

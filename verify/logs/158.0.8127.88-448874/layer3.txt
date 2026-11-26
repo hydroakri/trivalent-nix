@@ -1,0 +1,7 @@
+== layer 3: SLSA provenance ==
+release 158.0.8127.88-448874-aarch64 (for 158.0.8127.88-448874) assets:
+  provenance.intoto.json
+-- cosign verify-blob-attestation (provenance.intoto.json, offline vs verify/sigstore-trusted-root.json)
+Verified OK
+provenance rc=0
+OK: layer 3 verified

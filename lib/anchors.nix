@@ -25,7 +25,8 @@ in
   fpr = need "SECUREBLUE_FPR"; # 40-hex GPG primary-key fingerprint
   fprShort = lib.toLower (lib.substring 32 8 (need "SECUREBLUE_FPR")); # last 8 (rpm-sequoia key id)
   gpgSha256 = need "SECUREBLUE_GPG_SHA256"; # sha256 hex of secureblue.gpg
-  slsaBuilderId = need "SLSA_BUILDER_ID";
+  slsaSignerId = need "SLSA_SIGNER_ID"; # v1 provenance: attesting workflow identity
+  slsaBuilderId = need "SLSA_BUILDER_ID"; # legacy v0.2 provenance builder
   slsaSourceUri = need "SLSA_SOURCE_URI"; # e.g. github.com/secureblue/Trivalent
   slsaSourceBranch = need "SLSA_SOURCE_BRANCH"; # e.g. live
 }

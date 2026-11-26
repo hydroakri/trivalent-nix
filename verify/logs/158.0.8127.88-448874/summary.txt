@@ -1,0 +1,11 @@
+version-release : 158.0.8127.88-448874
+arch            : aarch64
+rpm             : trivalent-158.0.8127.88-448874.aarch64.rpm
+rpm sha256      : 92709b2ef6915c3998167df992204730632602ef7f3f4c85b245acf91e229bfc
+repodata sha256 : 92709b2ef6915c3998167df992204730632602ef7f3f4c85b245acf91e229bfc
+signing key fpr : 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41  (pinned 26B4463ED8F313BC7E3FBDF9D9223AF0F47B3E41)
+slsa signer     : https://github.com/slsa-framework/actions/.github/workflows/attest_actions.yml@refs/tags/v0.2.0
+layer 1 (rpm sig)      exit: 0
+layer 2 (repodata sig) exit: 0
+layer 3 (provenance)   exit: 0
+RESULT: PASS
